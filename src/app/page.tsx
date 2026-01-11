@@ -1,14 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { createRun, loadLatestRun, loadContent, saveRun } from "@/lib/api";
 import type { ContentBundle, GameState } from "@/game/types";
 import * as Engine from "@/game/engine";
 import CombatMenu from "@/ui/CombatMenu";
 
-export default function HomePage() {
+import { Card } from "@/ui/components/Card";
+import { Button } from "@/ui/components/Button";
+
+export default function HomePage () {
   const [session, setSession] = useState<any>(null);
+
+if (typeof window !== "undefined") {
+  // eslint-disable-next-line no-console
+  console.log("COMPONENTS:", { Card, Button, CombatMenu });
+}
+
 
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
@@ -18,7 +27,6 @@ export default function HomePage() {
   const [run, setRun] = useState<any>(null);
   const [state, setState] = useState<GameState | null>(null);
 
-  // small toast line for quick feedback
   const [toast, setToast] = useState<string>("");
 
   useEffect(() => {
@@ -74,7 +82,7 @@ export default function HomePage() {
     }
 
     setRun(latest.run);
-    setState(latest.state as GameState);
+    setState(Engine.normalizeState(bundle, latest.state));
     setMsg("Ready.");
   }
 
@@ -83,7 +91,7 @@ export default function HomePage() {
     const bundle = content ?? (await loadBundle());
     setContent(bundle);
 
-    const initial = Engine.restartRun(bundle);
+    const initial = Engine.makeNewRunState(bundle);
     const created = await createRun("Test Run", initial);
 
     setRun(created.run);
@@ -97,83 +105,101 @@ export default function HomePage() {
     await saveRun(run.id, next);
   }
 
-  const inputStyle: React.CSSProperties = useMemo(
-    () => ({
-      padding: 10,
-      borderRadius: 10,
-      border: "1px solid rgba(80,110,190,0.35)",
-      background: "rgba(0,0,0,0.25)",
-      color: "#eaf0ff"
-    }),
-    []
-  );
-
-  const btn: React.CSSProperties = useMemo(
-    () => ({
-      padding: "10px 12px",
-      borderRadius: 14,
-      border: "1px solid rgba(120,160,255,0.22)",
-      background: "rgba(0,0,0,0.35)",
-      color: "#eaf0ff",
-      cursor: "pointer"
-    }),
-    []
-  );
-
-  if (!session) {
-    return (
-      <div style={{ padding: 24, fontFamily: "system-ui" }}>
-        <h2 style={{ marginTop: 0 }}>Menu RPG Web Lab</h2>
-        <p style={{ opacity: 0.85 }}>
-          Sign in to load/save runs (Supabase Auth).
-        </p>
-
-        <div style={{ display: "grid", gap: 10, maxWidth: 420 }}>
-          <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
-          <input placeholder="password" type="password" value={pass} onChange={(e) => setPass(e.target.value)} style={inputStyle} />
-
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button style={btn} onClick={signIn}>Sign In</button>
-            <button style={btn} onClick={signUp}>Sign Up</button>
-          </div>
-
-          <div style={{ opacity: 0.85 }}>{msg}</div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui", maxWidth: 980, margin: "0 auto" }}>
-      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <h2 style={{ margin: 0 }}>Menu RPG Web Lab</h2>
-        <button style={btn} onClick={signOut}>Sign out</button>
+    <div className="min-h-screen bg-ink-950">
+      <div className="noise" />
 
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button style={btn} onClick={boot}>Load Latest Run</button>
-          <button style={btn} onClick={newRun}>Create New Run</button>
-        </div>
-      </div>
-
-      <div style={{ marginTop: 10, opacity: 0.85 }}>{msg}</div>
-      {toast ? <div style={{ marginTop: 8, opacity: 0.95 }}>{toast}</div> : null}
-
-      <div style={{ marginTop: 18 }}>
-        {!content ? (
-          <div style={{ opacity: 0.8 }}>
-            No content loaded. Click <b>Load Latest Run</b> or <b>Create New Run</b>.
+      {/* Stage */}
+      <div className="mx-auto max-w-6xl p-6">
+        {/* Top bar */}
+        <div className="mb-5 flex flex-wrap items-center gap-3">
+          <div>
+            <div className="text-2xl font-extrabold tracking-tight">Tides of the Deep — Menu Lab</div>
+            <div className="text-sm text-white/60">
+              Early Access Build • Supabase Saves Enabled
+            </div>
           </div>
-        ) : !run || !state ? (
-          <div style={{ opacity: 0.8 }}>
-            No run loaded yet. Click <b>Create New Run</b>.
+
+          <div className="ml-auto flex flex-wrap gap-2">
+            {session ? (
+              <>
+                <Button variant="soft" onClick={boot}>Load Latest Run</Button>
+                <Button variant="hot" onClick={newRun}>Create New Run</Button>
+                <Button variant="soft" onClick={signOut}>Sign out</Button>
+              </>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Toast / status */}
+        {msg ? (
+          <div className="mb-3 text-sm text-white/75">{msg}</div>
+        ) : null}
+        {toast ? (
+          <div className="mb-3 text-sm text-white/90">{toast}</div>
+        ) : null}
+
+        {/* Auth */}
+        {!session ? (
+          <div className="grid place-items-center py-10">
+            <div className="w-full max-w-md">
+              <Card className="p-5 ocean-bg">
+                <div className="text-xl font-extrabold tracking-tight">Sign in</div>
+                <div className="mt-1 text-sm text-white/70">
+                  Use Supabase Auth to load/save runs.
+                </div>
+
+                <div className="mt-4 grid gap-3">
+                  <input
+                    className="w-full rounded-2xl border border-neon-500/20 bg-black/30 px-4 py-3 text-white/90 placeholder:text-white/35 focus:border-neon-300/45 focus:bg-black/40 transition"
+                    placeholder="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                  <input
+                    className="w-full rounded-2xl border border-neon-500/20 bg-black/30 px-4 py-3 text-white/90 placeholder:text-white/35 focus:border-neon-300/45 focus:bg-black/40 transition"
+                    placeholder="password"
+                    type="password"
+                    value={pass}
+                    onChange={(e) => setPass(e.target.value)}
+                  />
+
+                  <div className="mt-1 flex gap-2 flex-wrap">
+                    <Button variant="hot" onClick={signIn}>Sign In</Button>
+                    <Button variant="soft" onClick={signUp}>Sign Up</Button>
+                  </div>
+
+                  {msg ? (
+                    <div className="text-sm text-white/75">{msg}</div>
+                  ) : (
+                    <div className="text-sm text-white/50">
+                      Tip: if you don’t get in, check your email confirmation.
+                    </div>
+                  )}
+                </div>
+              </Card>
+            </div>
           </div>
         ) : (
-          <CombatMenu
-            content={content}
-            state={state}
-            onCommit={commit}
-            onSoftToast={softToast}
-          />
+          /* App */
+          <div className="mt-4">
+            {!content ? (
+              <Card className="p-5">
+                <div className="text-white/80">
+                  No content loaded. Click <span className="font-semibold text-neon-300">Load Latest Run</span> or{" "}
+                  <span className="font-semibold text-neon-300">Create New Run</span>.
+                </div>
+              </Card>
+            ) : !run || !state ? (
+              <Card className="p-5">
+                <div className="text-white/80">
+                  No run loaded yet. Click <span className="font-semibold text-neon-300">Create New Run</span>.
+                </div>
+              </Card>
+            ) : (
+              <CombatMenu content={content} state={state} onCommit={commit} onSoftToast={softToast} />
+            )}
+          </div>
         )}
       </div>
     </div>
