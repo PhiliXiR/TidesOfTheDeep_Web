@@ -64,35 +64,17 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
     let text = "";
     let kind: FloatText["kind"] = "info";
 
-    if (e.type === "DAMAGE") {
-      text = `-${e.amount}`;
-      kind = "damage";
-    } else if (e.type === "HEAL") {
-      text = `+${e.amount}`;
-      kind = "heal";
-    } else if (e.type === "XP") {
-      text = `+${e.amount} XP`;
-      kind = "xp";
-    } else if (e.type === "LEVEL_UP") {
-      text = `LEVEL UP!`;
-      kind = "info";
-    } else if (e.type === "SPAWN") {
-      text = `HOOKED!`;
-      kind = "info";
-    } else if (e.type === "FLEE") {
-      text = `FLED`;
-      kind = "info";
-    } else if (e.type === "DEFEAT_PROMPT") {
-      text = `DEFEATED`;
-      kind = "info";
-    } else {
-      return;
-    }
+    if (e.type === "DAMAGE") { text = `-${e.amount}`; kind = "damage"; }
+    else if (e.type === "HEAL") { text = `+${e.amount}`; kind = "heal"; }
+    else if (e.type === "XP") { text = `+${e.amount} XP`; kind = "xp"; }
+    else if (e.type === "LEVEL_UP") { text = `LEVEL UP`; kind = "info"; }
+    else if (e.type === "SPAWN") { text = `HOOKED`; kind = "info"; }
+    else if (e.type === "FLEE") { text = `FLED`; kind = "info"; }
+    else if (e.type === "DEFEAT_PROMPT") { text = `DEFEATED`; kind = "info"; }
+    else return;
 
     const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const f: FloatText = { id, text, kind };
-
-    setFloats((prev) => [f, ...prev].slice(0, 3));
+    setFloats((prev) => [{ id, text, kind }, ...prev].slice(0, 3));
     window.setTimeout(() => setFloats((prev) => prev.filter((x) => x.id !== id)), 900);
   }
 
@@ -111,7 +93,10 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
     { id: "TECHNIQUES", label: "Techniques", enabled: inCombat }
   ];
 
-  const activeTabIndex = useMemo(() => Math.max(0, tabs.findIndex((t) => t.id === tab)), [tab]);
+  const activeTabIndex = useMemo(
+    () => Math.max(0, tabs.findIndex((t) => t.id === tab)),
+    [tab]
+  );
 
   function EventLine() {
     const e = state.lastEvent;
@@ -127,11 +112,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
     if (e.type === "DEFEAT_PROMPT") text = "Defeated…";
     if (e.type === "FLEE") text = "Fled.";
 
-    return (
-      <div className="subtle mono" style={{ marginTop: 6 }}>
-        {text}
-      </div>
-    );
+    return <div className="dim mono">{text}</div>;
   }
 
   function TabsRow() {
@@ -140,8 +121,8 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
         <motion.div
           className="tab-indicator"
           initial={false}
-          animate={{ x: activeTabIndex * (86 + 6) }}
-          transition={{ type: "spring", stiffness: 240, damping: 24 }}
+          animate={{ x: activeTabIndex * (92 + 6) }}
+          transition={{ type: "spring", stiffness: 260, damping: 24 }}
         />
         {tabs.map((t) => (
           <button
@@ -157,6 +138,24 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
     );
   }
 
+  function TurnChip() {
+    if (!inCombat) return null;
+    const phase = state.combat?.phase;
+    const isPlayer = phase === "PLAYER";
+    const cls = ["turn-chip", isPlayer ? "turn-chip--player" : "turn-chip--enemy"].join(" ");
+    return (
+      <motion.div
+        className={cls}
+        initial={{ opacity: 0, y: -6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ type: "spring", stiffness: 260, damping: 22 }}
+      >
+        <span className="turn-chip-dot" />
+        {isPlayer ? "YOUR TURN" : "ENEMY TURN"}
+      </motion.div>
+    );
+  }
+
   function Panel({ show, children }: { show: boolean; children: React.ReactNode }) {
     return (
       <AnimatePresence mode="wait">
@@ -166,7 +165,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
-            transition={{ type: "spring", stiffness: 200, damping: 24 }}
+            transition={{ type: "spring", stiffness: 220, damping: 24 }}
           >
             {children}
           </motion.div>
@@ -183,17 +182,21 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
           <div className="subtle">Choose a region you can access. Then start a fight.</div>
         </div>
 
-        <div className="grid" style={{ gap: 8 }}>
+        <div className="list">
           {regionList.map((r) => {
             const locked = state.player.level < r.requiredLevel;
             const active = r.id === state.progress.regionId;
 
             return (
-              <button
+              <motion.button
                 key={r.id}
                 disabled={locked}
                 onClick={() => act(() => Engine.setRegion(content, state, r.id))}
                 className={["row", active ? "row--active" : ""].join(" ")}
+                initial={false}
+                animate={active ? { scale: 1 } : { scale: 1 }}
+                whileHover={locked ? undefined : { scale: 1.005 }}
+                whileTap={locked ? undefined : { scale: 0.995 }}
               >
                 <div className="row-left">
                   <motion.span
@@ -204,16 +207,17 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
                   >
                     ▶
                   </motion.span>
+
                   <div style={{ minWidth: 0 }}>
-                    <div className="value" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {r.name}
+                    <div className="row-title">
+                      {r.name} {locked ? <span className="dim mono" style={{ marginLeft: 8 }}>🔒</span> : null}
                     </div>
-                    <div className="label mono">{r.id}</div>
+                    <div className="row-sub mono">{r.id}</div>
                   </div>
                 </div>
 
                 <div className="mono subtle">Lv {r.requiredLevel}+</div>
-              </button>
+              </motion.button>
             );
           })}
         </div>
@@ -236,7 +240,6 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
 
   function FightPanel() {
     if (!inCombat || !enemy) return <div className="subtle">No combat right now.</div>;
-
     const lockedByPrompt = defeatPromptOpen;
 
     return (
@@ -262,7 +265,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
                 variant="hot"
                 disabled={disabled}
                 onClick={() => act(() => Engine.applyAction(content, state, a.id))}
-                style={{ width: "100%", display: "flex", justifyContent: "space-between", gap: 10 }}
+                style={{ width: "100%", display: "flex", justifyContent: "space-between", gap: 12 }}
               >
                 <span className="value">{a.label}</span>
                 <span className="mono subtle">{subtitle}</span>
@@ -291,7 +294,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
                 key={it.id}
                 variant="soft"
                 onClick={() => act(() => Engine.useItem(content, state, it.id))}
-                style={{ width: "100%", display: "flex", justifyContent: "space-between", gap: 10 }}
+                style={{ width: "100%", display: "flex", justifyContent: "space-between", gap: 12 }}
               >
                 <span className="value">{it.label}</span>
                 <span className="mono subtle">x{it.count} • Heal {it.heal}</span>
@@ -316,67 +319,83 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
     );
   }
 
+  // Enemy micro-juice: shake + ripple on enemy damage
   const enemyFlashKey = state.combat ? `enemyhp_${state.combat.enemyHp}` : "enemyhp_none";
-  const hitEnemy =
-    state.lastEvent?.type === "DAMAGE" && state.lastEvent.who === "enemy";
+  const hitEnemy = state.lastEvent?.type === "DAMAGE" && state.lastEvent.who === "enemy";
 
   return (
-    <div className="frame pad-md" style={{ position: "relative" }}>
-      {/* float numbers */}
-      <div className="float-layer">
-        <AnimatePresence>
-          {floats.map((f, idx) => (
-            <motion.div
-              key={f.id}
-              initial={{ opacity: 0, y: 10, scale: 0.98 }}
-              animate={{ opacity: 1, y: -10 - idx * 16, scale: 1 }}
-              exit={{ opacity: 0, y: -22 - idx * 18, scale: 0.98 }}
-              transition={{ duration: 0.55 }}
-              className={[
-                "float",
-                f.kind === "damage"
-                  ? "float--dmg"
-                  : f.kind === "heal"
-                  ? "float--heal"
-                  : f.kind === "xp"
-                  ? "float--xp"
-                  : "float--info"
-              ].join(" ")}
-            >
-              {f.text}
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
+    <>
+      {/* background layers */}
+      <div className="ocean-drift" />
+      <div className="noise" />
 
-      {/* header */}
-      <div className="topbar" style={{ marginBottom: 8 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <div className="value">Tides of the Deep</div>
-          <div className="label">
-            Region <span className="mono" style={{ color: "rgba(255,255,255,.75)" }}>{state.progress.regionId}</span>
-            {inCombat ? (
-              <>
-                <span style={{ margin: "0 8px", color: "rgba(255,255,255,.25)" }}>•</span>
-                Turn <span className="mono" style={{ color: "rgba(255,255,255,.75)" }}>{state.combat?.turn}</span>
-              </>
-            ) : null}
+      <div className="frame pad-lg" style={{ position: "relative" }}>
+        {/* float numbers */}
+        <div className="float-layer">
+          <AnimatePresence>
+            {floats.map((f, idx) => (
+              <motion.div
+                key={f.id}
+                initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                animate={{ opacity: 1, y: -10 - idx * 16, scale: 1 }}
+                exit={{ opacity: 0, y: -22 - idx * 18, scale: 0.98 }}
+                transition={{ duration: 0.55 }}
+                className={[
+                  "float",
+                  f.kind === "damage"
+                    ? "float--dmg"
+                    : f.kind === "heal"
+                    ? "float--heal"
+                    : f.kind === "xp"
+                    ? "float--xp"
+                    : "float--info"
+                ].join(" ")}
+              >
+                {f.text}
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+
+        {/* Header */}
+        <div className="panel" style={{ padding: 12, marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "grid", gap: 4, minWidth: 280 }}>
+              <div className="title">Tides of the Deep</div>
+              <div className="label">
+                Region <span className="mono" style={{ color: "rgba(255,255,255,.72)" }}>{state.progress.regionId}</span>
+                {inCombat ? (
+                  <>
+                    <span style={{ margin: "0 8px", color: "rgba(255,255,255,.22)" }}>•</span>
+                    Turn <span className="mono" style={{ color: "rgba(255,255,255,.72)" }}>{state.combat?.turn}</span>
+                  </>
+                ) : null}
+              </div>
+              <EventLine />
+            </div>
+
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <TurnChip />
+              <TabsRow />
+            </div>
           </div>
-          <EventLine />
         </div>
 
-        <div className="actions">
-          <TabsRow />
-        </div>
-      </div>
+        {/* HUD */}
+        <div className="grid-2" style={{ marginBottom: 10 }}>
+          {/* Player */}
+          <div className="panel" style={{ padding: 12 }}>
+            <div className="panel-head">
+              <div className="badge">
+                <span className="badge-dot" />
+                <span className="label">Player</span>
+              </div>
+              <div className="mono subtle">Lv {state.player.level}</div>
+            </div>
 
-      {/* HUD */}
-      <div className="grid-2" style={{ marginBottom: 10 }}>
-        <div className="panel pad-sm">
-          <div className="label" style={{ marginBottom: 8 }}>Player</div>
-          <div className="grid" style={{ gap: 10 }}>
-            <div className="grid" style={{ gap: 6 }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
+            {/* XP */}
+            <div className="grid" style={{ gap: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                 <span className="label">Experience</span>
                 <span className="mono subtle">{state.player.xp}/{state.player.xpToNext}</span>
               </div>
@@ -393,81 +412,91 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
                   transition={{ type: "spring", stiffness: 140, damping: 20 }}
                 />
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span className="label">Level</span>
-                <span className="mono subtle">Lv {state.player.level}</span>
+
+              <Progress label="HP" value={state.player.hp} max={state.player.maxHp} tone="neon" />
+              <Progress label="Focus" value={state.player.focus} max={state.player.maxFocus} tone="aqua" />
+            </div>
+          </div>
+
+          {/* Enemy */}
+          <div className="panel" style={{ padding: 12, position: "relative", overflow: "hidden" }}>
+            {/* ripple */}
+            <AnimatePresence>
+              {hitEnemy ? (
+                <motion.div
+                  key="ripple"
+                  initial={{ opacity: 0.0, scale: 0.8 }}
+                  animate={{ opacity: 0.24, scale: 1.35 }}
+                  exit={{ opacity: 0.0 }}
+                  transition={{ duration: 0.35 }}
+                  style={{
+                    position: "absolute",
+                    right: -80,
+                    top: -90,
+                    width: 260,
+                    height: 260,
+                    borderRadius: 999,
+                    background:
+                      "radial-gradient(circle, rgba(70,255,230,.22), rgba(120,170,255,.10), transparent 65%)",
+                    pointerEvents: "none"
+                  }}
+                />
+              ) : null}
+            </AnimatePresence>
+
+            <div className="panel-head">
+              <div className="badge">
+                <span className="badge-dot" style={{ background: "rgba(70,255,230,.72)" }} />
+                <span className="label">Enemy</span>
               </div>
+              <div className="mono subtle">{enemy ? `HP ${state.combat?.enemyHp}/${enemy.maxHp}` : ""}</div>
             </div>
 
-            <Progress label="HP" value={state.player.hp} max={state.player.maxHp} tone="neon" />
-            <Progress label="Focus" value={state.player.focus} max={state.player.maxFocus} tone="aqua" />
+            {inCombat && enemy ? (
+              <div className="grid" style={{ gap: 10 }}>
+                <motion.div
+                  key={enemyFlashKey}
+                  initial={{ x: 0 }}
+                  animate={{ x: hitEnemy ? [0, -2, 2, -1, 1, 0] : 0 }}
+                  transition={{ duration: 0.22 }}
+                  className="value"
+                  style={{ fontSize: 16 }}
+                >
+                  {enemy.name}
+                </motion.div>
+
+                <Progress label="HP" value={state.combat!.enemyHp} max={enemy.maxHp} tone="neon" />
+
+                <div className="label">
+                  <span className="mono subtle">ATK {enemy.attack}</span>
+                  <span style={{ margin: "0 8px", color: "rgba(255,255,255,.22)" }}>•</span>
+                  <span className="mono subtle">XP {enemy.xp}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="subtle">No enemy engaged.</div>
+            )}
           </div>
         </div>
 
-        <div className="panel pad-sm" style={{ position: "relative", overflow: "hidden" }}>
-          {/* hit flash */}
-          <motion.div
-            key={enemyFlashKey}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: hitEnemy ? 0.22 : 0 }}
-            transition={{ duration: 0.12 }}
-            style={{
-              position: "absolute",
-              inset: 0,
-              pointerEvents: "none",
-              background: "radial-gradient(420px 220px at 70% 35%, rgba(60,255,230,.20), transparent 60%)"
-            }}
-          />
-
-          <div className="label" style={{ marginBottom: 8 }}>Enemy</div>
-
-          {inCombat && enemy ? (
-            <div className="grid" style={{ gap: 10, position: "relative" }}>
-              <motion.div
-                key={enemyFlashKey}
-                initial={{ x: 0 }}
-                animate={{
-                  x: hitEnemy ? [0, -2, 2, -1, 1, 0] : 0
-                }}
-                transition={{ duration: 0.22 }}
-                className="value"
-              >
-                {enemy.name}
-              </motion.div>
-
-              <Progress label="HP" value={state.combat!.enemyHp} max={enemy.maxHp} tone="neon" />
-
-              <div className="label">
-                <span className="mono subtle">ATK {enemy.attack}</span>
-                <span style={{ margin: "0 8px", color: "rgba(255,255,255,.25)" }}>•</span>
-                <span className="mono subtle">XP {enemy.xp}</span>
-              </div>
-            </div>
-          ) : (
-            <div className="subtle">No enemy engaged.</div>
-          )}
+        {/* Content */}
+        <div className="panel" style={{ padding: 12 }}>
+          <Panel show={tab === "MAIN"}><OverworldPanel /></Panel>
+          <Panel show={tab === "FIGHT"}><FightPanel /></Panel>
+          <Panel show={tab === "ITEMS"}><ItemsPanel /></Panel>
+          <Panel show={tab === "TECHNIQUES"}><TechniquesPanel /></Panel>
         </div>
+
+        {/* Defeat */}
+        <Modal open={defeatPromptOpen} title="Defeated">
+          <div className="subtle">Retry the same fish, or flee back to the overworld.</div>
+          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Button variant="hot" onClick={() => act(() => Engine.retryFight(content, state))}>Retry</Button>
+            <Button variant="soft" onClick={() => act(() => Engine.flee(state))}>Flee</Button>
+          </div>
+        </Modal>
       </div>
-
-      {/* Content deck */}
-      <div className="panel pad-md">
-        <Panel show={tab === "MAIN"}><OverworldPanel /></Panel>
-        <Panel show={tab === "FIGHT"}><FightPanel /></Panel>
-        <Panel show={tab === "ITEMS"}><ItemsPanel /></Panel>
-        <Panel show={tab === "TECHNIQUES"}><TechniquesPanel /></Panel>
-      </div>
-
-      {/* defeat modal */}
-      <Modal open={defeatPromptOpen} title="Defeated">
-        <div className="subtle">
-          Retry the same fish, or flee back to the overworld.
-        </div>
-        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Button variant="hot" onClick={() => act(() => Engine.retryFight(content, state))}>Retry</Button>
-          <Button variant="soft" onClick={() => act(() => Engine.flee(state))}>Flee</Button>
-        </div>
-      </Modal>
-    </div>
+    </>
   );
 }
 
