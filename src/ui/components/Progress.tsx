@@ -6,20 +6,30 @@ type Props = {
   label: string;
   value: number;
   max: number;
-  tone?: "neon" | "aqua";
+  tone?: "neon" | "aqua" | "danger";
+  showNumbers?: boolean;
 };
 
-export function Progress({ label, value, max, tone = "neon" }: Props) {
+export function Progress({ label, value, max, tone = "neon", showNumbers = true }: Props) {
   const pct = max <= 0 ? 0 : Math.max(0, Math.min(100, (value / max) * 100));
-  const fillClass = tone === "aqua" ? "bar-fill bar-fill--aqua" : "bar-fill bar-fill--neon";
+  const fillClass =
+    tone === "aqua"
+      ? "bar-fill bar-fill--aqua"
+      : tone === "danger"
+      ? "bar-fill bar-fill--danger"
+      : "bar-fill bar-fill--neon";
 
   return (
     <div className="grid" style={{ gap: 6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <span className="label">{label}</span>
-        <span className="mono subtle">
-          {value}/{max}
-        </span>
+        {showNumbers ? (
+          <span className="mono subtle">
+            {value}/{max}
+          </span>
+        ) : (
+          <span className="mono subtle">&nbsp;</span>
+        )}
       </div>
       <div className="bar">
         <div className={fillClass} style={{ width: `${pct}%` }} />

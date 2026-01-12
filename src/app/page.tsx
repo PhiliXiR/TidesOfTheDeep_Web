@@ -114,7 +114,8 @@ if (typeof window !== "undefined") {
         {/* Top bar */}
         <div className="mb-5 flex flex-wrap items-center gap-3">
           <div>
-            <div className="text-2xl font-extrabold tracking-tight">Tides of the Deep — Menu Lab</div>
+            <div className="game-title game-title--animated">Tides of the Deep</div>
+            <div className="text-sm text-white/70 -mt-1">Menu Lab</div>
             <div className="text-sm text-white/60">
               Early Access Build • Supabase Saves Enabled
             </div>

@@ -1,0 +1,173 @@
+{
+  "items": {
+    "large_potion": {
+      "id": "large_potion",
+      "label": "Large Repair Kit",
+      "integrityRestore": 45,
+      "tensionReduce": 8,
+      "heal": 45
+    },
+    "small_potion": {
+      "id": "small_potion",
+      "label": "Small Repair Kit",
+      "integrityRestore": 20,
+      "tensionReduce": 4,
+      "heal": 20
+    }
+  },
+  "actions": {
+    "jab": {
+      "id": "jab",
+      "label": "Jab",
+      "kind": "reel",
+      "timing": "basic",
+      "staminaDelta": -7,
+      "tensionDelta": 10
+    },
+    "strike": {
+      "id": "strike",
+      "label": "Strike",
+      "kind": "reel",
+      "timing": "basic",
+      "staminaDelta": -10,
+      "tensionDelta": 12
+    },
+    "breathe": {
+      "id": "breathe",
+      "label": "Breathe",
+      "kind": "brace",
+      "timing": "none",
+      "staminaDelta": 0,
+      "tensionDelta": 16
+    },
+    "hookset": {
+      "id": "hookset",
+      "label": "Hookset",
+      "kind": "technique",
+      "timing": "basic",
+      "staminaDelta": -16,
+      "tensionDelta": 18
+    },
+    "reel_in": {
+      "id": "reel_in",
+      "label": "Reel In",
+      "kind": "adjust",
+      "timing": "none",
+      "staminaDelta": 0,
+      "tensionDelta": 12
+    },
+    "power_cast": {
+      "id": "power_cast",
+      "label": "Power Cast",
+      "kind": "technique",
+      "timing": "basic",
+      "staminaDelta": -26,
+      "tensionDelta": 26
+    }
+  },
+  "enemies": {
+    "mudmaw": {
+      "id": "mudmaw",
+      "xp": 34,
+      "name": "Mudmaw",
+      "stamina": 95,
+      "pressure": 12
+    },
+    "glowgill": {
+      "id": "glowgill",
+      "xp": 40,
+      "name": "Glowgill",
+      "stamina": 88,
+      "pressure": 14
+    },
+    "razorfin": {
+      "id": "razorfin",
+      "xp": 25,
+      "name": "Razorfin",
+      "stamina": 78,
+      "pressure": 11
+    },
+    "scrapjaw": {
+      "id": "scrapjaw",
+      "xp": 18,
+      "name": "Scrapjaw",
+      "stamina": 60,
+      "pressure": 9
+    },
+    "abyssking": {
+      "id": "abyssking",
+      "xp": 80,
+      "name": "Abyss King",
+      "stamina": 160,
+      "pressure": 18
+    },
+    "ironsturgeon": {
+      "id": "ironsturgeon",
+      "xp": 55,
+      "name": "Iron Sturgeon",
+      "stamina": 120,
+      "pressure": 16
+    }
+  },
+  "loadout": {
+    "startItems": {
+      "small_potion": 2
+    },
+    "startActions": [
+      "strike",
+      "hookset",
+      "breathe"
+    ]
+  },
+  "regions": {
+    "reef_2": {
+      "id": "reef_2",
+      "name": "Reef",
+      "encounterPool": [
+        {
+          "weight": 55,
+          "enemyId": "mudmaw"
+        },
+        {
+          "weight": 45,
+          "enemyId": "glowgill"
+        }
+      ],
+      "requiredLevel": 4
+    },
+    "shore_1": {
+      "id": "shore_1",
+      "name": "Shoreline",
+      "encounterPool": [
+        {
+          "weight": 60,
+          "enemyId": "scrapjaw"
+        },
+        {
+          "weight": 40,
+          "enemyId": "razorfin"
+        }
+      ],
+      "requiredLevel": 1
+    },
+    "depths_3": {
+      "id": "depths_3",
+      "name": "Deep Water",
+      "encounterPool": [
+        {
+          "weight": 60,
+          "enemyId": "ironsturgeon"
+        },
+        {
+          "weight": 40,
+          "enemyId": "abyssking"
+        }
+      ],
+      "requiredLevel": 8
+    }
+  },
+  "xpCurve": {
+    "base": 40,
+    "growth": 1.22
+  }
+}
