@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { createRun, loadLatestRun, loadContent, saveRun } from "@/lib/api";
 import type { ContentBundle, GameState } from "@/game/types";
@@ -122,6 +123,7 @@ if (typeof window !== "undefined") {
           </div>
 
           <div className="ml-auto flex flex-wrap gap-2">
+            <Link href="/content" className="btn btn--soft">Creator Mode</Link>
             {session ? (
               <>
                 <Button variant="soft" onClick={boot}>Load Latest Run</Button>

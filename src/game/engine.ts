@@ -34,6 +34,10 @@ type PlayerStats = GameState["player"]["stats"];
  * This function keeps older runs playable without redesigning persistence.
  */
 export function normalizeState(content: ContentBundle, s: any): GameState {
+  const contentVersion = typeof s?.contentVersion === "string" && s.contentVersion.trim()
+    ? s.contentVersion
+    : (content.contentVersion ?? "0.1.0");
+
   // Migration support: if you load an old run that used nodeId/combat.encounterId, etc.
   // we coerce it into the fishing combat loop state.
   const regionId = s?.progress?.regionId ?? firstRegionId(content) ?? "shore_1";
@@ -125,6 +129,7 @@ export function normalizeState(content: ContentBundle, s: any): GameState {
     : undefined;
 
   return {
+    contentVersion,
     progress: { regionId },
     player: {
       level,
@@ -163,6 +168,7 @@ export function makeNewRunState(content: ContentBundle): GameState {
   const stats = defaultStats();
 
   return {
+    contentVersion: content.contentVersion ?? "0.1.0",
     progress: { regionId },
     player: {
       level,

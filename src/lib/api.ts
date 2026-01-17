@@ -40,9 +40,29 @@ export async function saveRun(runId: string, state: any) {
   return (await res.json()) as Promise<{ ok: true }>;
 }
 
-export async function loadContent(keys: string[]) {
+type ContentMeta = {
+  writeAllowed?: boolean;
+  writeMode?: string;
+};
+
+export async function loadContent(keys: string[]): Promise<{ content: Record<string, any> }>;
+export async function loadContent(
+  keys: string[],
+  opts: { includeMeta: true }
+): Promise<{ content: Record<string, any>; meta?: ContentMeta }>;
+export async function loadContent(keys: string[], opts?: { includeMeta?: boolean }) {
   const qs = encodeURIComponent(keys.join(","));
   const res = await authedFetch(`/api/content?keys=${qs}`, { method: "GET" });
   if (!res.ok) throw new Error(await res.text());
-  return (await res.json()) as Promise<{ content: Record<string, any> }>;
+  const json = (await res.json()) as { content: Record<string, any>; meta?: ContentMeta };
+  return opts?.includeMeta ? json : ({ content: json.content } as { content: Record<string, any> });
+}
+
+export async function saveContent(key: string, json: any) {
+  const res = await authedFetch("/api/content", {
+    method: "POST",
+    body: JSON.stringify({ key, json })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as Promise<{ ok: true }>;
 }

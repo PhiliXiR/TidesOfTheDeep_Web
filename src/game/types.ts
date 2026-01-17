@@ -20,6 +20,10 @@ export type SkillEffect =
   | { kind: "NEGATE_WEAR_ON_PERFECT" };
 
 export type ContentBundle = {
+  // Creator-mode version tag for migrations/compat.
+  // Persisted in Supabase under content.key = "content_bundle".
+  contentVersion?: string;
+
   xpCurve: { base: number; growth: number };
 
   tuning?: {
@@ -140,6 +144,10 @@ export type GameEvent =
   | { type: "FLEE" };
 
 export type GameState = {
+  // The content bundle version this snapshot was authored against.
+  // Used to support future content migrations while keeping runs playable.
+  contentVersion?: string;
+
   progress: { regionId: Id };
 
   player: {
