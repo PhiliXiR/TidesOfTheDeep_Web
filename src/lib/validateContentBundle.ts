@@ -114,6 +114,9 @@ export function validateContentBundle(input: unknown): ContentBundleValidationRe
   const actions = asDict((input as any).actions);
   const items = asDict((input as any).items);
   const skills = asDict((input as any).skills);
+  const rigMods = asDict((input as any).rigMods);
+  const shops = asDict((input as any).shops);
+  const contracts = asDict((input as any).contracts);
 
   // Basic dict validation
   checkDictHasIds(res, regions, "$.regions", "Region");
@@ -121,12 +124,183 @@ export function validateContentBundle(input: unknown): ContentBundleValidationRe
   checkDictHasIds(res, actions, "$.actions", "Action");
   checkDictHasIds(res, items, "$.items", "Item");
   if ("skills" in input) checkDictHasIds(res, skills, "$.skills", "Skill");
+  if ("rigMods" in input) checkDictHasIds(res, rigMods, "$.rigMods", "Rig mod");
+  if ("shops" in input) checkDictHasIds(res, shops, "$.shops", "Shop");
+  if ("contracts" in input) checkDictHasIds(res, contracts, "$.contracts", "Contract");
 
   checkUniqueKeys(res, regions, "$.regions");
   checkUniqueKeys(res, enemies, "$.enemies");
   checkUniqueKeys(res, actions, "$.actions");
   checkUniqueKeys(res, items, "$.items");
   if ("skills" in input) checkUniqueKeys(res, skills, "$.skills");
+  if ("rigMods" in input) checkUniqueKeys(res, rigMods, "$.rigMods");
+  if ("shops" in input) checkUniqueKeys(res, shops, "$.shops");
+  if ("contracts" in input) checkUniqueKeys(res, contracts, "$.contracts");
+
+  // Economy
+  const economy = (input as any).economy;
+  if (economy !== undefined) {
+    if (!isPlainObject(economy)) {
+      pushUnique(res.errors, { path: "$.economy", message: "economy must be an object." });
+    } else {
+      checkNonNegativeNumber(res, "$.economy.startingCurrency", economy.startingCurrency, "error");
+    }
+  }
+
+  // Rig mods: validate effect shapes
+  for (const [mid, m] of Object.entries(rigMods)) {
+    if (!isPlainObject(m)) continue;
+    const base = `$.rigMods.${mid}`;
+    const effects = (m as any).effects;
+    if (!Array.isArray(effects)) {
+      pushUnique(res.errors, { path: `${base}.effects`, message: "effects must be an array." });
+      continue;
+    }
+    for (let i = 0; i < effects.length; i++) {
+      const e = effects[i];
+      const p = `${base}.effects[${i}]`;
+      if (!isPlainObject(e)) {
+        pushUnique(res.errors, { path: p, message: "Effect must be an object." });
+        continue;
+      }
+      const kind = (e as any).kind;
+      if (kind !== "STAT_BONUS" && kind !== "FISH_TENSION_MULT" && kind !== "INTEGRITY_WEAR_MULT") {
+        pushUnique(res.errors, { path: `${p}.kind`, message: "Unknown effect kind." });
+        continue;
+      }
+      if (kind === "STAT_BONUS") {
+        const stat = (e as any).stat;
+        if (stat !== "control" && stat !== "power" && stat !== "durability" && stat !== "precision" && stat !== "tactics") {
+          pushUnique(res.errors, { path: `${p}.stat`, message: "Invalid stat key." });
+        }
+        if (typeof (e as any).add !== "number" || Number.isNaN((e as any).add)) {
+          pushUnique(res.errors, { path: `${p}.add`, message: "add must be a number." });
+        }
+      } else {
+        if (typeof (e as any).mult !== "number" || Number.isNaN((e as any).mult)) {
+          pushUnique(res.errors, { path: `${p}.mult`, message: "mult must be a number." });
+        }
+      }
+    }
+  }
+
+  // Shops: validate stock references
+  for (const [sid, sh] of Object.entries(shops)) {
+    if (!isPlainObject(sh)) continue;
+    const base = `$.shops.${sid}`;
+    const stock = (sh as any).stock;
+    if (!Array.isArray(stock)) {
+      pushUnique(res.errors, { path: `${base}.stock`, message: "stock must be an array." });
+      continue;
+    }
+    for (let i = 0; i < stock.length; i++) {
+      const row = stock[i];
+      const p = `${base}.stock[${i}]`;
+      if (!isPlainObject(row)) {
+        pushUnique(res.errors, { path: p, message: "Stock row must be an object." });
+        continue;
+      }
+      checkString(res, `${p}.id`, (row as any).id, true);
+      const kind = (row as any).kind;
+      if (kind !== "ITEM" && kind !== "RIG_MOD") {
+        pushUnique(res.errors, { path: `${p}.kind`, message: "kind must be ITEM or RIG_MOD." });
+        continue;
+      }
+      checkNonNegativeNumber(res, `${p}.price`, (row as any).price, "error");
+      if (kind === "ITEM") {
+        const itemId = (row as any).itemId;
+        if (typeof itemId !== "string" || !itemId) {
+          pushUnique(res.errors, { path: `${p}.itemId`, message: "itemId must be a non-empty string." });
+        } else if (!items[itemId]) {
+          pushUnique(res.errors, { path: `${p}.itemId`, message: `Unknown itemId '${itemId}'.` });
+        }
+        checkNonNegativeNumber(res, `${p}.amount`, (row as any).amount, "warning");
+      } else {
+        const modId = (row as any).modId;
+        if (typeof modId !== "string" || !modId) {
+          pushUnique(res.errors, { path: `${p}.modId`, message: "modId must be a non-empty string." });
+        } else if (!rigMods[modId]) {
+          pushUnique(res.errors, { path: `${p}.modId`, message: `Unknown rigMod '${modId}'.` });
+        }
+      }
+    }
+  }
+
+  // Contracts: validate pool + region + shop references
+  for (const [cid, c] of Object.entries(contracts)) {
+    if (!isPlainObject(c)) continue;
+    const base = `$.contracts.${cid}`;
+    const regionId = (c as any).regionId;
+    if (typeof regionId !== "string" || !regionId) {
+      pushUnique(res.errors, { path: `${base}.regionId`, message: "regionId must be a non-empty string." });
+    } else if (!regions[regionId]) {
+      pushUnique(res.errors, { path: `${base}.regionId`, message: `Unknown regionId '${regionId}'.` });
+    }
+
+    const encounterCount = (c as any).encounterCount;
+    if (!isPlainObject(encounterCount)) {
+      pushUnique(res.errors, { path: `${base}.encounterCount`, message: "encounterCount must be an object." });
+    } else {
+      checkNonNegativeNumber(res, `${base}.encounterCount.min`, encounterCount.min, "error");
+      checkNonNegativeNumber(res, `${base}.encounterCount.max`, encounterCount.max, "error");
+    }
+
+    const pool = (c as any).encounterPool;
+    if (pool !== undefined) {
+      if (!Array.isArray(pool)) {
+        pushUnique(res.errors, { path: `${base}.encounterPool`, message: "encounterPool must be an array." });
+      } else {
+        for (let i = 0; i < pool.length; i++) {
+          const row = pool[i];
+          const p = `${base}.encounterPool[${i}]`;
+          if (!isPlainObject(row)) {
+            pushUnique(res.errors, { path: p, message: "Pool row must be an object." });
+            continue;
+          }
+          const enemyId = (row as any).enemyId;
+          if (typeof enemyId !== "string" || !enemyId) {
+            pushUnique(res.errors, { path: `${p}.enemyId`, message: "enemyId must be a non-empty string." });
+          } else if (!enemies[enemyId]) {
+            pushUnique(res.errors, { path: `${p}.enemyId`, message: `Unknown enemyId '${enemyId}'.` });
+          }
+          checkNonNegativeNumber(res, `${p}.weight`, (row as any).weight, "error");
+        }
+      }
+    }
+
+    const shopId = (c as any).camp?.shopId;
+    if (shopId !== undefined) {
+      if (typeof shopId !== "string" || !shopId) {
+        pushUnique(res.errors, { path: `${base}.camp.shopId`, message: "shopId must be a non-empty string." });
+      } else if (!shops[shopId]) {
+        pushUnique(res.errors, { path: `${base}.camp.shopId`, message: `Unknown shopId '${shopId}'.` });
+      }
+    }
+
+    const rewards = (c as any).rewards;
+    if (rewards !== undefined) {
+      if (!isPlainObject(rewards)) {
+        pushUnique(res.errors, { path: `${base}.rewards`, message: "rewards must be an object." });
+      } else if (rewards.currency !== undefined && !isPlainObject(rewards.currency)) {
+        pushUnique(res.errors, { path: `${base}.rewards.currency`, message: "currency reward must be an object {min,max}." });
+      } else if (isPlainObject(rewards.currency)) {
+        checkNonNegativeNumber(res, `${base}.rewards.currency.min`, (rewards.currency as any).min, "error");
+        checkNonNegativeNumber(res, `${base}.rewards.currency.max`, (rewards.currency as any).max, "error");
+      }
+    }
+
+    const rewardsPerFight = (c as any).rewardsPerFight;
+    if (rewardsPerFight !== undefined) {
+      if (!isPlainObject(rewardsPerFight)) {
+        pushUnique(res.errors, { path: `${base}.rewardsPerFight`, message: "rewardsPerFight must be an object." });
+      } else if (rewardsPerFight.currency !== undefined && !isPlainObject(rewardsPerFight.currency)) {
+        pushUnique(res.errors, { path: `${base}.rewardsPerFight.currency`, message: "currency reward must be an object {min,max}." });
+      } else if (isPlainObject(rewardsPerFight.currency)) {
+        checkNonNegativeNumber(res, `${base}.rewardsPerFight.currency.min`, (rewardsPerFight.currency as any).min, "error");
+        checkNonNegativeNumber(res, `${base}.rewardsPerFight.currency.max`, (rewardsPerFight.currency as any).max, "error");
+      }
+    }
+  }
 
   // Cross references: region encounter pools -> enemies
   for (const [rid, r] of Object.entries(regions)) {

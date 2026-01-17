@@ -5,7 +5,7 @@ import { Card } from "@/ui/components/Card";
 import { Button } from "@/ui/components/Button";
 import type { ContentBundle } from "@/game/types";
 import { validateContentBundle, type ContentBundleValidationResult } from "@/lib/validateContentBundle";
-import { loadContent, saveContent } from "@/lib/api";
+import { loadContent, loadSeedContentBundle, saveContent } from "@/lib/api";
 
 type Mode = "VIEW" | "EDIT";
 
@@ -42,6 +42,8 @@ export default function ContentEditor() {
   const canSave = useMemo(() => {
     return !!writeAllowed && !!validation?.ok && dirty;
   }, [writeAllowed, validation?.ok, dirty]);
+
+  const seedEnabled = process.env.NODE_ENV !== "production";
 
   async function load() {
     setStatus("Loading content_bundle...");
@@ -178,6 +180,27 @@ export default function ContentEditor() {
     }
   }
 
+  async function seedFromRepo() {
+    if (!seedEnabled) return;
+    if (dirty) {
+      const ok = window.confirm("Replace editor contents with repo seed? (Unsaved changes will be lost in the editor.)");
+      if (!ok) return;
+    }
+
+    setStatus("Loading seed bundle from repo...");
+    setParseError("");
+    try {
+      const result = await loadSeedContentBundle();
+      const pretty = JSON.stringify(result.json, null, 2);
+      setRaw(pretty);
+      setValidation(validateContentBundle(result.json));
+      setMode("EDIT");
+      setStatus("Seed loaded (not saved). Validate + Save when ready.");
+    } catch (e: any) {
+      setStatus(e?.message ?? "Seed load failed");
+    }
+  }
+
   return (
     <div className="mx-auto max-w-6xl p-6">
       <div className="mb-5 flex flex-wrap items-center gap-3">
@@ -190,6 +213,11 @@ export default function ContentEditor() {
         <div className="ml-auto flex flex-wrap gap-2">
           <Button variant={mode === "VIEW" ? "hot" : "soft"} onClick={() => setMode("VIEW")}>View</Button>
           <Button variant={mode === "EDIT" ? "hot" : "soft"} onClick={() => setMode("EDIT")}>Edit</Button>
+          {seedEnabled ? (
+            <Button variant="soft" onClick={seedFromRepo}>
+              Seed from repo
+            </Button>
+          ) : null}
           <Button variant="soft" onClick={prettify} disabled={mode !== "EDIT"}>Prettify</Button>
           <Button variant="soft" onClick={validateNow}>Validate</Button>
           <Button variant="hot" onClick={save} disabled={!canSave}>Save</Button>

@@ -1,4 +1,5 @@
 {
+  "contentVersion": "0.2.0",
   "tuning": {
     "progression": {
       "baseLineIntegrity": 100,
@@ -12,6 +13,10 @@
       "goodPerControl": 0.0035,
       "goodPerLevel": 0.0012
     }
+  },
+  "economy": {
+    "startingCurrency": 25,
+    "defaultShopId": "dock_shop"
   },
   "items": {
     "large_potion": {
@@ -151,6 +156,107 @@
       "requiredLevel": 2,
       "maxRank": 1,
       "grantsActions": ["controlled_reel"]
+    }
+  },
+  "rigMods": {
+    "felt_drag_washers": {
+      "id": "felt_drag_washers",
+      "label": "Felt Drag Washers",
+      "description": "Smoother tension response. Slightly less tension from fish pulls.",
+      "effects": [{ "kind": "FISH_TENSION_MULT", "mult": 0.95 }]
+    },
+    "braided_leader": {
+      "id": "braided_leader",
+      "label": "Braided Leader",
+      "description": "More line forgiveness under spikes.",
+      "effects": [{ "kind": "INTEGRITY_WEAR_MULT", "mult": 0.92 }]
+    },
+    "counterweight_spool": {
+      "id": "counterweight_spool",
+      "label": "Counterweight Spool",
+      "description": "+1 Control, +1 Precision. Makes timing and safe tension slightly easier.",
+      "effects": [
+        { "kind": "STAT_BONUS", "stat": "control", "add": 1 },
+        { "kind": "STAT_BONUS", "stat": "precision", "add": 1 }
+      ]
+    },
+    "torque_handle": {
+      "id": "torque_handle",
+      "label": "Torque Handle",
+      "description": "+1 Power. Bigger reels, slightly riskier.",
+      "effects": [{ "kind": "STAT_BONUS", "stat": "power", "add": 1 }]
+    },
+    "shock_absorber": {
+      "id": "shock_absorber",
+      "label": "Shock Absorber",
+      "description": "+1 Durability. Less wear when tension goes over safe.",
+      "effects": [
+        { "kind": "STAT_BONUS", "stat": "durability", "add": 1 },
+        { "kind": "INTEGRITY_WEAR_MULT", "mult": 0.95 }
+      ]
+    }
+  },
+  "shops": {
+    "dock_shop": {
+      "id": "dock_shop",
+      "label": "Dock Supply (Shoreline)",
+      "stock": [
+        { "id": "dock_small_kit", "kind": "ITEM", "itemId": "small_potion", "amount": 1, "price": 8 },
+        { "id": "dock_large_kit", "kind": "ITEM", "itemId": "large_potion", "amount": 1, "price": 16 },
+        { "id": "dock_felt_drag", "kind": "RIG_MOD", "modId": "felt_drag_washers", "price": 12 },
+        { "id": "dock_counterweight", "kind": "RIG_MOD", "modId": "counterweight_spool", "price": 18 }
+      ]
+    },
+    "reef_outpost": {
+      "id": "reef_outpost",
+      "label": "Reef Outpost (Reef)",
+      "stock": [
+        { "id": "reef_small_kit", "kind": "ITEM", "itemId": "small_potion", "amount": 2, "price": 14 },
+        { "id": "reef_large_kit", "kind": "ITEM", "itemId": "large_potion", "amount": 1, "price": 20 },
+        { "id": "reef_braided", "kind": "RIG_MOD", "modId": "braided_leader", "price": 20 },
+        { "id": "reef_torque", "kind": "RIG_MOD", "modId": "torque_handle", "price": 22 }
+      ]
+    },
+    "abyss_trader": {
+      "id": "abyss_trader",
+      "label": "Abyss Trader (Deep Water)",
+      "stock": [
+        { "id": "abyss_large_kit", "kind": "ITEM", "itemId": "large_potion", "amount": 2, "price": 30 },
+        { "id": "abyss_shock", "kind": "RIG_MOD", "modId": "shock_absorber", "price": 34 },
+        { "id": "abyss_counterweight", "kind": "RIG_MOD", "modId": "counterweight_spool", "price": 28 }
+      ]
+    }
+  },
+  "contracts": {
+    "shore_patrol": {
+      "id": "shore_patrol",
+      "label": "Shore Patrol",
+      "description": "Short route. Good for practice and quick cash.",
+      "regionId": "shore_1",
+      "encounterCount": { "min": 2, "max": 4 },
+      "camp": { "shopId": "dock_shop" },
+      "rewardsPerFight": { "currency": { "min": 3, "max": 6 } },
+      "rewards": { "currency": { "min": 6, "max": 12 } }
+    },
+    "reef_salvage": {
+      "id": "reef_salvage",
+      "label": "Reef Salvage",
+      "description": "Mid-route contract with rougher pulls.",
+      "regionId": "reef_2",
+      "encounterCount": { "min": 3, "max": 5 },
+      "camp": { "shopId": "reef_outpost" },
+      "rewardsPerFight": { "currency": { "min": 5, "max": 9 } },
+      "rewards": { "currency": { "min": 10, "max": 20 } }
+    },
+    "deep_hunt": {
+      "id": "deep_hunt",
+      "label": "Deep Hunt",
+      "description": "High risk. High pressure. Big payout.",
+      "regionId": "depths_3",
+      "encounterCount": { "min": 2, "max": 5 },
+      "camp": { "shopId": "abyss_trader" },
+      "rewardsPerFight": { "currency": { "min": 8, "max": 14 } },
+      "rewards": { "currency": { "min": 20, "max": 40 } }
     }
   },
   "enemies": {

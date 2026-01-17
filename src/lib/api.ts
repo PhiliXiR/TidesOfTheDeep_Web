@@ -66,3 +66,9 @@ export async function saveContent(key: string, json: any) {
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as Promise<{ ok: true }>;
 }
+
+export async function loadSeedContentBundle() {
+  const res = await authedFetch("/api/content/seed", { method: "GET" });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as Promise<{ ok: true; json: any }>;
+}

@@ -6,18 +6,13 @@ import { supabase } from "@/lib/supabaseClient";
 import { createRun, loadLatestRun, loadContent, saveRun } from "@/lib/api";
 import type { ContentBundle, GameState } from "@/game/types";
 import * as Engine from "@/game/engine";
-import CombatMenu from "@/ui/CombatMenu";
+import MetaLoopMenu from "@/ui/MetaLoopMenu";
 
 import { Card } from "@/ui/components/Card";
 import { Button } from "@/ui/components/Button";
 
 export default function HomePage () {
   const [session, setSession] = useState<any>(null);
-
-if (typeof window !== "undefined") {
-  // eslint-disable-next-line no-console
-  console.log("COMPONENTS:", { Card, Button, CombatMenu });
-}
 
 
   const [email, setEmail] = useState("");
@@ -200,7 +195,7 @@ if (typeof window !== "undefined") {
                 </div>
               </Card>
             ) : (
-              <CombatMenu content={content} state={state} onCommit={commit} onSoftToast={softToast} />
+              <MetaLoopMenu content={content} state={state} onCommit={commit} onSoftToast={softToast} />
             )}
           </div>
         )}

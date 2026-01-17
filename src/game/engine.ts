@@ -128,6 +128,57 @@ export function normalizeState(content: ContentBundle, s: any): GameState {
       })()
     : undefined;
 
+  // Meta-loop fields (all optional / backward compatible)
+  const currency = clampNumber(
+    s?.currency,
+    0,
+    999999,
+    typeof content.economy?.startingCurrency === "number" ? Math.max(0, Math.floor(content.economy.startingCurrency)) : 0
+  );
+
+  const temporaryMods: Id[] = Array.isArray(s?.temporaryMods)
+    ? (s.temporaryMods.filter((x: any) => typeof x === "string") as Id[])
+    : [];
+
+  const contract = s?.contract && typeof s.contract === "object"
+    ? (() => {
+        const contractId = typeof s.contract.contractId === "string" ? (s.contract.contractId as Id) : null;
+        const contractRegionId = typeof s.contract.regionId === "string" ? (s.contract.regionId as Id) : regionId;
+
+        const encountersRaw = Array.isArray(s.contract.encounters) ? s.contract.encounters : [];
+        const encounters = encountersRaw
+          .map((e: any) => ({
+            regionId: typeof e?.regionId === "string" ? (e.regionId as Id) : contractRegionId,
+            enemyId: typeof e?.enemyId === "string" ? (e.enemyId as Id) : null
+          }))
+          .filter((e: any) => !!e.enemyId) as { regionId: Id; enemyId: Id }[];
+
+        const index = clampNumber(s.contract.index, 0, Math.max(0, encounters.length - 1), 0);
+        const phase = (s.contract.phase as any) === "CAMP" || (s.contract.phase as any) === "SUMMARY" ? s.contract.phase : "FIGHT";
+        const stats = {
+          perfectCount: clampNumber(s.contract.stats?.perfectCount, 0, 9999, 0),
+          fightsWon: clampNumber(s.contract.stats?.fightsWon, 0, 9999, 0)
+        };
+        const earned = {
+          currency: clampNumber(s.contract.earned?.currency, 0, 999999, 0)
+        };
+
+        if (!contractId) return undefined;
+        if (encounters.length <= 0) return undefined;
+
+        return {
+          contractId,
+          regionId: contractRegionId,
+          encounters,
+          index,
+          phase,
+          stats,
+          earned,
+          lastReward: s.contract.lastReward && typeof s.contract.lastReward === "object" ? s.contract.lastReward : undefined
+        } as GameState["contract"];
+      })()
+    : undefined;
+
   return {
     contentVersion,
     progress: { regionId },
@@ -146,6 +197,9 @@ export function normalizeState(content: ContentBundle, s: any): GameState {
       knownActions,
       inventory
     },
+    currency,
+    temporaryMods,
+    contract,
     combat,
     lastEvent: s?.lastEvent
   };
@@ -185,6 +239,9 @@ export function makeNewRunState(content: ContentBundle): GameState {
       knownActions: computeKnownActions(content, knownActions, {}),
       inventory
     },
+    currency: Math.max(0, Math.floor(content.economy?.startingCurrency ?? 0)),
+    temporaryMods: [],
+    contract: undefined,
     combat: undefined,
     lastEvent: { type: "LOG", text: "New run started." }
   };
@@ -374,6 +431,233 @@ export function startFight(content: ContentBundle, state: GameState): GameState 
 }
 
 /**
+ * Starts a specific encounter (used by contracts to be snapshot-safe).
+ */
+export function startFightAgainstEnemy(content: ContentBundle, state: GameState, regionId: Id, enemyId: Id): GameState {
+  const r = content.regions[regionId];
+  if (!r) return { ...state, lastEvent: { type: "LOG", text: `Missing region: ${regionId}` } };
+  if (state.player.level < r.requiredLevel) {
+    return { ...state, lastEvent: { type: "LOG", text: `Region locked: level ${r.requiredLevel}+` } };
+  }
+
+  const fish = getFish(content, enemyId);
+  if (!fish) return { ...state, lastEvent: { type: "LOG", text: `Missing enemy: ${enemyId}` } };
+
+  const maxFishStamina = fish.maxStamina;
+  const fishPhase = phaseForStamina(maxFishStamina, maxFishStamina);
+
+  return {
+    ...state,
+    progress: { regionId },
+    combat: {
+      enemyId,
+      fishStamina: maxFishStamina,
+      maxFishStamina,
+      fishPhase,
+      phase: "PLAYER",
+      turn: 1,
+      brace: 0,
+      control: 0,
+      lastSpawn: { regionId, enemyId },
+      outcome: "NONE"
+    },
+    lastEvent: { type: "SPAWN", regionId, enemyId }
+  };
+}
+
+// -----------------------------------------------------------------------------
+// META LOOP (CONTRACTS / SHOPS / TEMP MODS)
+// -----------------------------------------------------------------------------
+
+export function startContract(content: ContentBundle, state: GameState, contractId: Id): GameState {
+  const def = content.contracts?.[contractId];
+  if (!def) return { ...state, lastEvent: { type: "LOG", text: `Missing contract: ${contractId}` } };
+
+  if (state.combat) return { ...state, lastEvent: { type: "LOG", text: "Finish the current fight first." } };
+  if (state.contract) return { ...state, lastEvent: { type: "LOG", text: "Contract already active." } };
+
+  const region = content.regions?.[def.regionId];
+  if (!region) return { ...state, lastEvent: { type: "LOG", text: `Missing region: ${def.regionId}` } };
+  if (state.player.level < region.requiredLevel) {
+    return { ...state, lastEvent: { type: "LOG", text: `Locked. Requires level ${region.requiredLevel}.` } };
+  }
+
+  const pool = def.encounterPool && Array.isArray(def.encounterPool) && def.encounterPool.length
+    ? def.encounterPool
+    : region.encounterPool;
+
+  if (!Array.isArray(pool) || pool.length <= 0) {
+    return { ...state, lastEvent: { type: "LOG", text: "Contract encounter pool is empty." } };
+  }
+
+  const min = clampNumber(def.encounterCount?.min, 1, 12, 2);
+  const max = clampNumber(def.encounterCount?.max, min, 12, Math.max(min, 5));
+  const count = randInt(min, max);
+
+  // Snapshot-safe: resolve all RNG now, persist in state. Duplicates are allowed.
+  const encounters = Array.from({ length: count }).map(() => ({
+    regionId: def.regionId,
+    enemyId: pickWeighted(pool)
+  }));
+
+  const next: GameState = {
+    ...state,
+    progress: { regionId: def.regionId },
+    currency: typeof state.currency === "number" ? state.currency : Math.max(0, Math.floor(content.economy?.startingCurrency ?? 0)),
+    temporaryMods: Array.isArray(state.temporaryMods) ? state.temporaryMods : [],
+    contract: {
+      contractId: def.id,
+      regionId: def.regionId,
+      encounters,
+      index: 0,
+      phase: "FIGHT",
+      stats: { perfectCount: 0, fightsWon: 0 },
+      earned: { currency: 0 },
+      lastReward: undefined
+    }
+  };
+
+  return spawnContractEncounter(content, next);
+}
+
+export function spawnContractEncounter(content: ContentBundle, state: GameState): GameState {
+  const c = state.contract;
+  if (!c) return { ...state, lastEvent: { type: "LOG", text: "No active contract." } };
+  if (state.combat) return state;
+
+  const enc = c.encounters[c.index];
+  if (!enc) return { ...state, lastEvent: { type: "LOG", text: "No encounter available." } };
+
+  return startFightAgainstEnemy(
+    content,
+    {
+      ...state,
+      progress: { regionId: enc.regionId },
+      contract: { ...c, phase: "FIGHT", lastReward: undefined }
+    },
+    enc.regionId,
+    enc.enemyId
+  );
+}
+
+export function advanceContractAfterFight(content: ContentBundle, state: GameState): GameState {
+  const c = state.contract;
+  if (!c) return { ...state, lastEvent: { type: "LOG", text: "No active contract." } };
+  if (state.combat) return { ...state, lastEvent: { type: "LOG", text: "Finish the fight first." } };
+  if (c.phase !== "FIGHT") return state;
+
+  const def = content.contracts?.[c.contractId];
+  if (!def) return { ...state, contract: undefined, lastEvent: { type: "LOG", text: "Contract missing from content (ended)." } };
+
+  const perFightCurrency = rollRange(def.rewardsPerFight?.currency);
+  let next: GameState = state;
+  if (perFightCurrency > 0) next = addCurrency(next, perFightCurrency);
+
+  const fightsWon = c.stats.fightsWon + 1;
+  const earnedCurrency = c.earned.currency + perFightCurrency;
+  const lastReward = perFightCurrency > 0 ? { currency: perFightCurrency } : undefined;
+
+  const isLast = c.index >= c.encounters.length - 1;
+  if (isLast) {
+    const finalCurrency = rollRange(def.rewards?.currency);
+    next = finalCurrency > 0 ? addCurrency(next, finalCurrency) : next;
+    return {
+      ...next,
+      contract: {
+        ...c,
+        phase: "SUMMARY",
+        stats: { ...c.stats, fightsWon },
+        earned: { currency: earnedCurrency + finalCurrency },
+        lastReward: {
+          currency: (lastReward?.currency ?? 0) + (finalCurrency > 0 ? finalCurrency : 0)
+        }
+      },
+      lastEvent: { type: "LOG", text: "Contract complete." }
+    };
+  }
+
+  return {
+    ...next,
+    contract: {
+      ...c,
+      phase: "CAMP",
+      stats: { ...c.stats, fightsWon },
+      earned: { currency: earnedCurrency },
+      lastReward
+    },
+    lastEvent: { type: "LOG", text: "Camp." }
+  };
+}
+
+export function continueContract(content: ContentBundle, state: GameState): GameState {
+  const c = state.contract;
+  if (!c) return { ...state, lastEvent: { type: "LOG", text: "No active contract." } };
+  if (state.combat) return state;
+  if (c.phase !== "CAMP") return state;
+
+  const next: GameState = {
+    ...state,
+    contract: {
+      ...c,
+      index: clamp(c.index + 1, 0, Math.max(0, c.encounters.length - 1)),
+      phase: "FIGHT",
+      lastReward: undefined
+    }
+  };
+
+  return spawnContractEncounter(content, next);
+}
+
+export function endContract(state: GameState): GameState {
+  if (!state.contract) return state;
+  return {
+    ...state,
+    contract: undefined,
+    lastEvent: { type: "LOG", text: "Back to board." }
+  };
+}
+
+export function buyFromShop(content: ContentBundle, state: GameState, shopId: Id, stockId: Id): GameState {
+  const shop = content.shops?.[shopId];
+  if (!shop) return { ...state, lastEvent: { type: "LOG", text: `Missing shop: ${shopId}` } };
+  const entry = (shop.stock ?? []).find((s) => s.id === stockId);
+  if (!entry) return { ...state, lastEvent: { type: "LOG", text: "Missing shop item." } };
+
+  const cur = typeof state.currency === "number" ? state.currency : 0;
+  if (cur < entry.price) return { ...state, lastEvent: { type: "LOG", text: "Not enough currency." } };
+
+  if (entry.kind === "ITEM") {
+    const item = content.items?.[entry.itemId];
+    if (!item) return { ...state, lastEvent: { type: "LOG", text: `Missing item: ${entry.itemId}` } };
+    const amt = clampNumber(entry.amount, 1, 999, 1);
+    return {
+      ...state,
+      currency: cur - entry.price,
+      player: {
+        ...state.player,
+        inventory: {
+          ...state.player.inventory,
+          [entry.itemId]: (state.player.inventory?.[entry.itemId] ?? 0) + amt
+        }
+      },
+      lastEvent: { type: "LOG", text: `Bought ${item.label} x${amt}.` }
+    };
+  }
+
+  // RIG_MOD
+  const mod = content.rigMods?.[entry.modId];
+  if (!mod) return { ...state, lastEvent: { type: "LOG", text: `Missing rig mod: ${entry.modId}` } };
+  const mods = Array.isArray(state.temporaryMods) ? state.temporaryMods : [];
+  if (mods.includes(entry.modId)) return { ...state, lastEvent: { type: "LOG", text: "Already installed." } };
+  return {
+    ...state,
+    currency: cur - entry.price,
+    temporaryMods: [...mods, entry.modId],
+    lastEvent: { type: "LOG", text: `Installed: ${mod.label}.` }
+  };
+}
+
+/**
  * Retry uses the last spawn, resets the fish, and restores line integrity so the
  * player can immediately test strategy again (testing-friendly).
  */
@@ -449,7 +733,7 @@ export function applyAction(content: ContentBundle, state: GameState, actionId: 
   const fish = getFish(content, state.combat.enemyId);
 
   const { reelEffMult } = phaseTuning(state, state.combat.fishPhase);
-  const stats = state.player.stats;
+  const stats = effectiveStats(content, state);
   const effects = collectEffects(content, state);
 
   let staminaMult = 1;
@@ -469,7 +753,18 @@ export function applyAction(content: ContentBundle, state: GameState, actionId: 
     }
   }
 
-  let next: GameState = { ...state };
+  let next: GameState = state;
+
+  // Meta-loop objective tracking (does not affect combat rules)
+  if (timing === "PERFECT" && next.contract && next.contract.phase === "FIGHT") {
+    next = {
+      ...next,
+      contract: {
+        ...next.contract,
+        stats: { ...next.contract.stats, perfectCount: next.contract.stats.perfectCount + 1 }
+      }
+    };
+  }
 
   // Apply player action effects (player phase only).
   if (intent.kind === "reel" || intent.kind === "technique") {
@@ -489,7 +784,7 @@ export function applyAction(content: ContentBundle, state: GameState, actionId: 
     };
 
     // Reeling always raises tension (risk). At high tension, Power gets riskier.
-    const overSafe = Math.max(0, next.player.tension - safeTensionLimit(next));
+    const overSafe = Math.max(0, next.player.tension - safeTensionLimit(content, next));
     const powerRisk = overSafe > 0 ? Math.round(stats.power * 0.35) : 0;
     next = applyTension(next, intent.tension + tensionBonus + powerRisk - tensionRelief, "Reel");
 
@@ -595,7 +890,7 @@ function fishTurn(_content: ContentBundle, fish: FishDef, state: GameState): Gam
   if (!state.combat) return state;
 
   const { pressureMult } = phaseTuning(state, state.combat.fishPhase);
-  const stats = state.player.stats;
+  const stats = effectiveStats(_content, state);
   const effects = collectEffects(_content, state);
 
   // Passive skill effect: small stamina bleed during EXHAUSTED phase.
@@ -870,10 +1165,10 @@ function interpretAction(a: ContentBundle["actions"][Id]) {
 // TENSION / INTEGRITY RULES
 // -----------------------------------------------------------------------------
 
-function safeTensionLimit(state: GameState): number {
+function safeTensionLimit(content: ContentBundle, state: GameState): number {
   // Control slightly raises the safe band. Keep it subtle.
   const combatControl = state.combat?.control ?? 0;
-  const statControl = state.player.stats?.control ?? 0;
+  const statControl = effectiveStats(content, state).control;
   return clamp(58 + Math.round(combatControl * 0.35) + Math.round(statControl * 1.15), 50, 86);
 }
 
@@ -890,14 +1185,14 @@ function applyIntegrityWear(content: ContentBundle, state: GameState, reason?: s
   // If a skill flag negates wear this turn, do nothing.
   if (state.combat?.skill?.negateWearThisTurn) return state;
 
-  const safe = safeTensionLimit(state);
+  const safe = safeTensionLimit(content, state);
   const over = Math.max(0, state.player.tension - safe);
   if (over <= 0) return state;
 
   // Wear is slow, but it *matters*.
   // This is the ONLY path to defeat: integrity -> 0 (line break).
   const baseWear = clamp(Math.ceil(over / 10), 1, 8);
-  const stats = state.player.stats;
+  const stats = effectiveStats(content, state);
   const effects = collectEffects(content, state);
 
   const durabilityMult = clamp(1 - stats.durability * 0.03, 0.65, 1);
@@ -1054,5 +1349,78 @@ function collectEffects(content: ContentBundle, state: GameState): EffectTotals 
     }
   }
 
+  // Rig mods apply multiplicative modifiers too.
+  const rig = collectRigTotals(content, state);
+  totals.integrityWearMult *= rig.integrityWearMult;
+  totals.fishTensionMult *= rig.fishTensionMult;
+
   return totals;
+}
+
+type RigTotals = {
+  statBonus: Partial<Record<StatKey, number>>;
+  fishTensionMult: number;
+  integrityWearMult: number;
+};
+
+function collectRigTotals(content: ContentBundle, state: GameState): RigTotals {
+  const totals: RigTotals = {
+    statBonus: {},
+    fishTensionMult: 1,
+    integrityWearMult: 1
+  };
+
+  const mods = Array.isArray(state.temporaryMods) ? state.temporaryMods : [];
+  if (!mods.length) return totals;
+
+  const defs = content.rigMods ?? {};
+  for (const id of mods) {
+    const def = defs[id];
+    if (!def) continue;
+    for (const e of def.effects ?? []) {
+      if (!e || typeof e !== "object") continue;
+      if (e.kind === "STAT_BONUS") {
+        const add = typeof e.add === "number" ? e.add : 0;
+        const stat = e.stat as StatKey;
+        if (stat !== "control" && stat !== "power" && stat !== "durability" && stat !== "precision" && stat !== "tactics") continue;
+        totals.statBonus[stat] = (totals.statBonus[stat] ?? 0) + add;
+      } else if (e.kind === "FISH_TENSION_MULT") {
+        const mult = typeof e.mult === "number" ? e.mult : 1;
+        totals.fishTensionMult *= clamp(mult, 0.25, 2.5);
+      } else if (e.kind === "INTEGRITY_WEAR_MULT") {
+        const mult = typeof e.mult === "number" ? e.mult : 1;
+        totals.integrityWearMult *= clamp(mult, 0.25, 2.5);
+      }
+    }
+  }
+
+  return totals;
+}
+
+function effectiveStats(content: ContentBundle, state: GameState): PlayerStats {
+  const base = state.player.stats;
+  const rig = collectRigTotals(content, state);
+  const out: PlayerStats = { ...base };
+  for (const k of Object.keys(rig.statBonus) as StatKey[]) {
+    out[k] = clamp((out[k] ?? 0) + (rig.statBonus[k] ?? 0), 0, 99);
+  }
+  return out;
+}
+
+function addCurrency(state: GameState, amount: number): GameState {
+  const a = Math.max(0, Math.floor(amount));
+  const cur = typeof state.currency === "number" ? state.currency : 0;
+  return { ...state, currency: cur + a };
+}
+
+function rollRange(r?: { min: number; max: number }): number {
+  if (!r) return 0;
+  const min = clampNumber(r.min, 0, 999999, 0);
+  const max = clampNumber(r.max, min, 999999, min);
+  return randInt(min, max);
+}
+
+function randInt(min: number, max: number): number {
+  if (max <= min) return min;
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }

@@ -128,6 +128,64 @@ export type ContentBundle = {
     startActions?: Id[];
     startItems?: Record<Id, number>;
   };
+
+  // --- Meta Loop (optional / MVP) ---
+
+  economy?: {
+    startingCurrency?: number;
+    defaultShopId?: Id;
+  };
+
+  rigMods?: Record<
+    Id,
+    {
+      id: Id;
+      label: string;
+      description?: string;
+      effects: (
+        | { kind: "STAT_BONUS"; stat: StatKey; add: number }
+        | { kind: "FISH_TENSION_MULT"; mult: number }
+        | { kind: "INTEGRITY_WEAR_MULT"; mult: number }
+      )[];
+    }
+  >;
+
+  shops?: Record<
+    Id,
+    {
+      id: Id;
+      label: string;
+      stock: (
+        | { id: Id; kind: "ITEM"; itemId: Id; amount?: number; price: number }
+        | { id: Id; kind: "RIG_MOD"; modId: Id; price: number }
+      )[];
+    }
+  >;
+
+  contracts?: Record<
+    Id,
+    {
+      id: Id;
+      label: string;
+      description?: string;
+
+      regionId: Id;
+      encounterCount: { min: number; max: number };
+      encounterPool?: { enemyId: Id; weight: number }[];
+
+      camp?: {
+        shopId?: Id;
+      };
+
+      rewards?: {
+        currency?: { min: number; max: number };
+      };
+
+      rewardsPerFight?: {
+        currency?: { min: number; max: number };
+      };
+    }
+  >;
 };
 
 export type GameEvent =
@@ -170,6 +228,22 @@ export type GameState = {
 
     knownActions: Id[];
     inventory: Record<Id, number>;
+  };
+
+  // Meta-loop resources (optional; normalized to safe defaults).
+  currency?: number;
+  temporaryMods?: Id[];
+
+  // Contract state machine (optional).
+  contract?: {
+    contractId: Id;
+    regionId: Id;
+    encounters: { regionId: Id; enemyId: Id }[];
+    index: number; // current encounter index
+    phase: "FIGHT" | "CAMP" | "SUMMARY";
+    stats: { perfectCount: number; fightsWon: number };
+    earned: { currency: number };
+    lastReward?: { currency?: number };
   };
 
   combat?: {
