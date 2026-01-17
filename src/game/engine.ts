@@ -1,5 +1,38 @@
-import { ContentBundle, FishPhase, GameState, Id, TimingGrade } from "./types";
+import { ContentBundle, FishPhase, GameState, Id, StatKey, TimingGrade } from "./types";
 
+type PlayerStats = GameState["player"]["stats"];
+
+/**
+ * Pure game engine for Tides of the Deep.
+ *
+ * This file is intentionally UI-agnostic and side-effect free.
+ * Every exported function returns a new `GameState` (no mutation, no I/O).
+ *
+ * Locked gameplay rules this engine enforces:
+ * - No player HP.
+ * - Defeat only happens when `lineIntegrity` reaches 0 (line break).
+ * - Fish have stamina + phases (not HP).
+ * - Tension is the primary danger signal; high tension causes integrity wear.
+ *
+ * Progression systems (also locked):
+ * - Exactly 5 stats: control, power, durability, precision, tactics.
+ * - Skills are data-driven via `ContentBundle.skills` (passive/active/reactive).
+ * - Full respec is always allowed (testing mode).
+ */
+
+// -----------------------------------------------------------------------------
+// STATE NORMALIZATION / MIGRATION
+// -----------------------------------------------------------------------------
+
+/**
+ * Normalizes an arbitrary saved snapshot into the current fishing-combat model.
+ *
+ * Why this exists:
+ * - Old saves may have legacy fields (hp/focus/enemyHp, ENEMY turn names, etc).
+ * - Newer systems add stats/skills/derived integrity.
+ *
+ * This function keeps older runs playable without redesigning persistence.
+ */
 export function normalizeState(content: ContentBundle, s: any): GameState {
   // Migration support: if you load an old run that used nodeId/combat.encounterId, etc.
   // we coerce it into the fishing combat loop state.
@@ -9,19 +42,50 @@ export function normalizeState(content: ContentBundle, s: any): GameState {
   const xp = typeof s?.player?.xp === "number" ? s.player.xp : 0;
   const xpToNext = typeof s?.player?.xpToNext === "number" ? s.player.xpToNext : xpForLevel(content, level);
 
+  const stats: PlayerStats = normalizeStats(s?.player?.stats);
+
+  // Stat points: total points are a function of level; unspent is derived unless present.
+  const totalStatPoints = totalStatPointsForLevel(level);
+  const spentStatPoints = sumStats(stats);
+  const unspentStatPoints = clampNumber(
+    s?.player?.unspentStatPoints ?? (totalStatPoints - spentStatPoints),
+    0,
+    totalStatPoints,
+    Math.max(0, totalStatPoints - spentStatPoints)
+  );
+
+  const skillRanks: Record<Id, number> =
+    s?.player?.skillRanks && typeof s.player.skillRanks === "object" ? s.player.skillRanks : {};
+
+  // Skill points follow the same model: total points are a function of level.
+  const totalSkillPoints = totalSkillPointsForLevel(level);
+  const spentSkillPoints = sumSkillRanks(skillRanks);
+  const unspentSkillPoints = clampNumber(
+    s?.player?.unspentSkillPoints ?? (totalSkillPoints - spentSkillPoints),
+    0,
+    totalSkillPoints,
+    Math.max(0, totalSkillPoints - spentSkillPoints)
+  );
+
   const maxTension = typeof s?.player?.maxTension === "number" ? s.player.maxTension : 100;
   // Legacy mapping: old state.player.focus becomes a rough starting tension.
   const tensionFromLegacy = typeof s?.player?.focus === "number" ? Math.round((s.player.focus / 40) * 35) : undefined;
   const tension = clampNumber(s?.player?.tension ?? tensionFromLegacy, 0, maxTension, 12);
 
-  const maxLineIntegrity = typeof s?.player?.maxLineIntegrity === "number" ? s.player.maxLineIntegrity : 100;
+  // Line integrity is derived from (level, durability) so Durability meaningfully matters.
+  const derivedMaxLineIntegrity = deriveMaxLineIntegrity(content, level, stats.durability);
+  const maxLineIntegrity = typeof s?.player?.maxLineIntegrity === "number" ? s.player.maxLineIntegrity : derivedMaxLineIntegrity;
+  const normalizedMaxLineIntegrity = derivedMaxLineIntegrity;
   // Legacy mapping: old state.player.hp becomes line integrity.
   const integrityFromLegacy = typeof s?.player?.hp === "number" ? Math.round((s.player.hp / Math.max(1, s.player.maxHp ?? 80)) * maxLineIntegrity) : undefined;
-  const lineIntegrity = clampNumber(s?.player?.lineIntegrity ?? integrityFromLegacy, 0, maxLineIntegrity, maxLineIntegrity);
+  const lineIntegrity = clampNumber(s?.player?.lineIntegrity ?? integrityFromLegacy, 0, normalizedMaxLineIntegrity, normalizedMaxLineIntegrity);
 
-  const knownActions: Id[] = Array.isArray(s?.player?.knownActions)
+  const baseActions: Id[] = Array.isArray(s?.player?.knownActions)
     ? s.player.knownActions
     : content.loadout?.startActions ?? ["strike", "hookset", "breathe"];
+
+  // Active skills can grant actions (menu techniques) into `knownActions`.
+  const knownActions = computeKnownActions(content, baseActions, skillRanks);
 
   const inventory: Record<Id, number> =
     s?.player?.inventory && typeof s.player.inventory === "object"
@@ -48,10 +112,12 @@ export function normalizeState(content: ContentBundle, s: any): GameState {
           fishStamina,
           maxFishStamina,
           fishPhase,
+          // Old state used "ENEMY". New state uses "FISH".
           phase: (s.combat.phase as any) === "ENEMY" ? "FISH" : ((s.combat.phase as any) ?? "PLAYER"),
           turn: (s.combat.turn as number) ?? 1,
           brace: typeof s.combat.brace === "number" ? s.combat.brace : 0,
           control: typeof s.combat.control === "number" ? s.combat.control : 0,
+          skill: s.combat.skill ?? undefined,
           lastSpawn: s.combat.lastSpawn ?? undefined,
           outcome: s.combat.outcome ?? "NONE"
         } as GameState["combat"];
@@ -60,18 +126,41 @@ export function normalizeState(content: ContentBundle, s: any): GameState {
 
   return {
     progress: { regionId },
-    player: { level, xp, xpToNext, tension, maxTension, lineIntegrity, maxLineIntegrity, knownActions, inventory },
+    player: {
+      level,
+      xp,
+      xpToNext,
+      stats,
+      unspentStatPoints,
+      skillRanks,
+      unspentSkillPoints,
+      tension,
+      maxTension,
+      lineIntegrity,
+      maxLineIntegrity: normalizedMaxLineIntegrity,
+      knownActions,
+      inventory
+    },
     combat,
     lastEvent: s?.lastEvent
   };
 }
 
+// -----------------------------------------------------------------------------
+// NEW RUN + BUILD (STATS/SKILLS)
+// -----------------------------------------------------------------------------
+
+/**
+ * Creates a brand new run. Starter actions/items come from `content.loadout`.
+ * Stats start at 0; level is 1.
+ */
 export function makeNewRunState(content: ContentBundle): GameState {
   const regionId = firstRegionId(content) ?? "shore_1";
   const knownActions = content.loadout?.startActions ?? ["strike", "hookset", "breathe"];
   const inventory = content.loadout?.startItems ?? { small_potion: 2 };
 
   const level = 1;
+  const stats = defaultStats();
 
   return {
     progress: { regionId },
@@ -79,15 +168,141 @@ export function makeNewRunState(content: ContentBundle): GameState {
       level,
       xp: 0,
       xpToNext: xpForLevel(content, level),
+      stats,
+      unspentStatPoints: totalStatPointsForLevel(level),
+      skillRanks: {},
+      unspentSkillPoints: totalSkillPointsForLevel(level),
       tension: 10,
       maxTension: 100,
-      lineIntegrity: 100,
-      maxLineIntegrity: 100,
-      knownActions,
+      lineIntegrity: deriveMaxLineIntegrity(content, level, stats.durability),
+      maxLineIntegrity: deriveMaxLineIntegrity(content, level, stats.durability),
+      knownActions: computeKnownActions(content, knownActions, {}),
       inventory
     },
     combat: undefined,
     lastEvent: { type: "LOG", text: "New run started." }
+  };
+}
+
+/**
+ * Returns the timing minigame windows for the current state.
+ *
+ * The UI uses this so timing forgiveness scales with:
+ * - Precision (expands PERFECT)
+ * - Control + level (widens GOOD a bit)
+ *
+ * Values are radii around 0.5 in the timing bar (0..1).
+ */
+export function getTimingWindows(content: ContentBundle, state: GameState): { perfectRadius: number; goodRadius: number } {
+  // Radii are measured as distance from 0.5 on the timing bar.
+  const t = content.tuning?.timing;
+  const basePerfect = t?.basePerfectRadius ?? 0.07;
+  const baseGood = t?.baseGoodRadius ?? 0.18;
+
+  const perfect = basePerfect + (t?.perfectPerPrecision ?? 0.008) * state.player.stats.precision;
+  const good = baseGood + (t?.goodPerControl ?? 0.0035) * state.player.stats.control + (t?.goodPerLevel ?? 0.0012) * (state.player.level - 1);
+
+  // Keep sane bounds.
+  return {
+    perfectRadius: clamp(perfect, 0.04, 0.16),
+    goodRadius: clamp(Math.max(good, perfect + 0.04), 0.12, 0.32)
+  };
+}
+
+/**
+ * Spends one stat point into the selected stat.
+ *
+ * Note: Durability changes max Line Integrity, so we recompute it here.
+ */
+export function spendStatPoint(content: ContentBundle, state: GameState, stat: StatKey): GameState {
+  if (state.player.unspentStatPoints <= 0) return { ...state, lastEvent: { type: "LOG", text: "No stat points." } };
+  const nextStats = { ...state.player.stats, [stat]: state.player.stats[stat] + 1 } as PlayerStats;
+
+  const nextMax = deriveMaxLineIntegrity(content, state.player.level, nextStats.durability);
+  return {
+    ...state,
+    player: {
+      ...state.player,
+      stats: nextStats,
+      unspentStatPoints: state.player.unspentStatPoints - 1,
+      maxLineIntegrity: nextMax,
+      lineIntegrity: clamp(state.player.lineIntegrity, 0, nextMax)
+    },
+    lastEvent: { type: "LOG", text: `+1 ${stat}` }
+  };
+}
+
+/**
+ * Testing-mode respec.
+ *
+ * Locked policy: full respec is allowed at any time.
+ * We reset stats + skills and refund points (derived from level).
+ */
+export function respecAll(content: ContentBundle, state: GameState): GameState {
+  const level = state.player.level;
+  const stats = defaultStats();
+  const maxLineIntegrity = deriveMaxLineIntegrity(content, level, stats.durability);
+
+  const baseActions = content.loadout?.startActions ?? ["strike", "hookset", "breathe"];
+
+  return {
+    ...state,
+    player: {
+      ...state.player,
+      stats,
+      unspentStatPoints: totalStatPointsForLevel(level),
+      skillRanks: {},
+      unspentSkillPoints: totalSkillPointsForLevel(level),
+      maxLineIntegrity,
+      lineIntegrity: maxLineIntegrity,
+      knownActions: computeKnownActions(content, baseActions, {})
+    },
+    combat: state.combat
+      ? {
+          ...state.combat,
+          brace: 0,
+          control: 0,
+          skill: undefined
+        }
+      : state.combat,
+    lastEvent: { type: "LOG", text: "Respec complete." }
+  };
+}
+
+/**
+ * Unlocks or upgrades a skill by spending one skill point.
+ *
+ * - PASSIVE/REACTIVE skills contribute modifiers/triggers.
+ * - ACTIVE skills can grant new actions into the player's menu.
+ */
+export function unlockOrUpgradeSkill(content: ContentBundle, state: GameState, skillId: Id): GameState {
+  const skill = content.skills?.[skillId];
+  if (!skill) return { ...state, lastEvent: { type: "LOG", text: `Missing skill: ${skillId}` } };
+  if (state.player.level < skill.requiredLevel) return { ...state, lastEvent: { type: "LOG", text: `Requires level ${skill.requiredLevel}.` } };
+  if (state.player.unspentSkillPoints <= 0) return { ...state, lastEvent: { type: "LOG", text: "No skill points." } };
+
+  const prereq = skill.prereq ?? [];
+  for (const p of prereq) {
+    if ((state.player.skillRanks[p] ?? 0) <= 0) {
+      return { ...state, lastEvent: { type: "LOG", text: `Missing prerequisite: ${p}` } };
+    }
+  }
+
+  const currentRank = state.player.skillRanks[skillId] ?? 0;
+  if (currentRank >= skill.maxRank) return { ...state, lastEvent: { type: "LOG", text: "Max rank." } };
+
+  const nextRanks = { ...state.player.skillRanks, [skillId]: currentRank + 1 };
+  const knownActions = computeKnownActions(content, state.player.knownActions ?? [], nextRanks);
+
+  return {
+    ...state,
+    player: {
+      ...state.player,
+      skillRanks: nextRanks,
+      unspentSkillPoints: state.player.unspentSkillPoints - 1,
+      knownActions
+    },
+    lastEvent: { type: "LOG", text: `Skill unlocked: ${skill.label}` }
   };
 }
 
@@ -109,6 +324,15 @@ export function setRegion(content: ContentBundle, state: GameState, regionId: Id
   };
 }
 
+// -----------------------------------------------------------------------------
+// ENCOUNTERS
+// -----------------------------------------------------------------------------
+
+/**
+ * Starts a random encounter in the current region.
+ *
+ * Important: The fish starts at full stamina, and the player always acts first.
+ */
 export function startFight(content: ContentBundle, state: GameState): GameState {
   const regionId = state.progress.regionId;
   const r = content.regions[regionId];
@@ -143,6 +367,10 @@ export function startFight(content: ContentBundle, state: GameState): GameState 
   };
 }
 
+/**
+ * Retry uses the last spawn, resets the fish, and restores line integrity so the
+ * player can immediately test strategy again (testing-friendly).
+ */
 export function retryFight(content: ContentBundle, state: GameState): GameState {
   const spawn = state.combat?.lastSpawn;
   if (!spawn) return { ...state, lastEvent: { type: "LOG", text: "No spawn to retry." } };
@@ -174,6 +402,9 @@ export function retryFight(content: ContentBundle, state: GameState): GameState 
   };
 }
 
+/**
+ * Flee ends combat and drops tension back to 0.
+ */
 export function flee(state: GameState): GameState {
   return {
     ...state,
@@ -183,6 +414,21 @@ export function flee(state: GameState): GameState {
   };
 }
 
+// -----------------------------------------------------------------------------
+// COMBAT LOOP
+// -----------------------------------------------------------------------------
+
+/**
+ * Applies a player action during combat.
+ *
+ * High-level flow:
+ * 1) Validate combat + turn
+ * 2) Interpret action -> fishing intent (supports legacy content)
+ * 3) Apply player effects
+ * 4) Update fish phase
+ * 5) Win check (fish stamina <= 0)
+ * 6) Fish response (fishTurn)
+ */
 export function applyAction(content: ContentBundle, state: GameState, actionId: Id, timing?: TimingGrade): GameState {
   if (!state.combat) return { ...state, lastEvent: { type: "LOG", text: "No combat active." } };
   if (state.combat.outcome === "DEFEAT_PROMPT") return state; // waiting on retry/flee
@@ -191,10 +437,14 @@ export function applyAction(content: ContentBundle, state: GameState, actionId: 
   const action = content.actions[actionId];
   if (!action) return { ...state, lastEvent: { type: "LOG", text: `Missing action: ${actionId}` } };
 
+  // Interpret action data into concrete intent values.
+  // This preserves backwards compatibility with older action exports.
   const intent = interpretAction(action);
   const fish = getFish(content, state.combat.enemyId);
 
-  const { reelEffMult } = phaseTuning(state.combat.fishPhase);
+  const { reelEffMult } = phaseTuning(state, state.combat.fishPhase);
+  const stats = state.player.stats;
+  const effects = collectEffects(content, state);
 
   let staminaMult = 1;
   let tensionBonus = 0;
@@ -203,22 +453,25 @@ export function applyAction(content: ContentBundle, state: GameState, actionId: 
   if (timing) {
     // Timing is an amplifier, not a replacement for stats.
     if (timing === "MISS") {
-      staminaMult = 0.15;
-      tensionBonus += 14;
+      staminaMult = 0.15 + Math.min(0.08, stats.precision * 0.004);
+      tensionBonus += Math.max(5, 14 - Math.round(stats.precision * 0.6) - Math.round(stats.control * 0.25));
     } else if (timing === "GOOD") {
-      staminaMult = 1.0;
+      staminaMult = 1.0 + Math.min(0.12, stats.precision * 0.006);
     } else if (timing === "PERFECT") {
-      staminaMult = 1.35;
-      tensionRelief += 6;
+      staminaMult = 1.35 + Math.min(0.28, stats.precision * 0.02);
+      tensionRelief += 6 + Math.round(stats.precision * 0.35);
     }
   }
 
   let next: GameState = { ...state };
 
-  // Apply player action effects
+  // Apply player action effects (player phase only).
   if (intent.kind === "reel" || intent.kind === "technique") {
     const baseStamina = Math.max(0, intent.staminaTake);
-    const take = Math.round(baseStamina * reelEffMult * staminaMult);
+
+    // Power increases progress. Techniques scale slightly harder than basic reels.
+    const powerMult = 1 + stats.power * (intent.kind === "technique" ? 0.05 : 0.035);
+    const take = Math.round(baseStamina * reelEffMult * staminaMult * powerMult);
 
     next = {
       ...next,
@@ -229,27 +482,46 @@ export function applyAction(content: ContentBundle, state: GameState, actionId: 
       lastEvent: { type: "STAMINA", delta: -take, phase: next.combat!.fishPhase, reason: intent.label }
     };
 
-    // Reeling always raises tension a bit, especially with heavier actions.
-    next = applyTension(next, intent.tension + tensionBonus - tensionRelief, "Reel");
+    // Reeling always raises tension (risk). At high tension, Power gets riskier.
+    const overSafe = Math.max(0, next.player.tension - safeTensionLimit(next));
+    const powerRisk = overSafe > 0 ? Math.round(stats.power * 0.35) : 0;
+    next = applyTension(next, intent.tension + tensionBonus + powerRisk - tensionRelief, "Reel");
+
+    if (timing === "PERFECT" && effects.negateWearOnPerfect) {
+      // Reactive skill support: mark a one-turn flag consumed by applyIntegrityWear.
+      next = {
+        ...next,
+        combat: {
+          ...next.combat!,
+          skill: { ...(next.combat?.skill ?? {}), negateWearThisTurn: true }
+        }
+      };
+    }
   } else if (intent.kind === "brace") {
     // Brace: reduce current tension and reduce incoming pressure.
-    next = applyTension(next, -intent.tension, "Brace");
+    const relief = Math.round(intent.tension * (1 + stats.tactics * 0.03 + levelBraceBonus(state.player.level)) + effects.braceReliefBonus);
+    next = applyTension(next, -relief, "Brace");
     next = {
       ...next,
-      combat: { ...next.combat!, brace: clamp(next.combat!.brace + intent.brace, 0, 40) },
+      combat: {
+        ...next.combat!,
+        brace: clamp(next.combat!.brace + Math.round(intent.brace * (1 + stats.tactics * 0.04 + levelBraceBonus(state.player.level)) + effects.braceBonus), 0, 60),
+        control: clamp(next.combat!.control + effects.controlOnBrace, 0, 60)
+      },
       lastEvent: { type: "LOG", text: "You brace and steady the line." }
     };
   } else if (intent.kind === "adjust") {
     // Adjust: a small immediate relief plus a persistent control bonus.
-    next = applyTension(next, -intent.tension, "Adjust" );
+    const relief = Math.round(intent.tension * (1 + stats.control * 0.01));
+    next = applyTension(next, -relief, "Adjust" );
     next = {
       ...next,
-      combat: { ...next.combat!, control: clamp(next.combat!.control + intent.control, 0, 40) },
+      combat: { ...next.combat!, control: clamp(next.combat!.control + Math.round(intent.control * (1 + stats.tactics * 0.05)), 0, 60) },
       lastEvent: { type: "LOG", text: "You adjust your angle and regain control." }
     };
   }
 
-  // Update fish phase after stamina changes
+  // Fish phase is derived from remaining stamina.
   if (next.combat) {
     const newPhase = phaseForStamina(next.combat.fishStamina, next.combat.maxFishStamina);
     if (newPhase !== next.combat.fishPhase) {
@@ -262,10 +534,15 @@ export function applyAction(content: ContentBundle, state: GameState, actionId: 
   // Win check
   if (next.combat && next.combat.fishStamina <= 0) return resolveWin(content, fish, next);
 
-  // Fish response
+  // Fish response ends the full turn.
   return fishTurn(content, fish, { ...next, combat: { ...next.combat!, phase: "FISH" } });
 }
 
+/**
+ * Uses an item (repair + optional tension reduction).
+ *
+ * If used in combat on the player's phase, the fish still takes its response.
+ */
 export function useItem(content: ContentBundle, state: GameState, itemId: Id): GameState {
   const count = state.player.inventory[itemId] ?? 0;
   if (count <= 0) return { ...state, lastEvent: { type: "LOG", text: "No item left." } };
@@ -301,16 +578,61 @@ export function useItem(content: ContentBundle, state: GameState, itemId: Id): G
   return next;
 }
 
+/**
+ * Fish response.
+ *
+ * Fish do not deal HP damage. Instead:
+ * - Fish pressure increases tension
+ * - If tension exceeds the safe band, line integrity takes wear
+ */
 function fishTurn(_content: ContentBundle, fish: FishDef, state: GameState): GameState {
   if (!state.combat) return state;
 
-  const { pressureMult } = phaseTuning(state.combat.fishPhase);
+  const { pressureMult } = phaseTuning(state, state.combat.fishPhase);
+  const stats = state.player.stats;
+  const effects = collectEffects(_content, state);
 
-  // Pressure is applied as tension gain. Brace reduces the next spike.
+  // Passive skill effect: small stamina bleed during EXHAUSTED phase.
+  let nextState: GameState = state;
+  if (state.combat.fishPhase === "EXHAUSTED" && effects.staminaBleedExhausted > 0) {
+    const bleed = Math.min(state.combat.fishStamina, effects.staminaBleedExhausted);
+    if (bleed > 0) {
+      nextState = {
+        ...nextState,
+        combat: { ...nextState.combat!, fishStamina: Math.max(0, nextState.combat!.fishStamina - bleed) },
+        lastEvent: { type: "STAMINA", delta: -bleed, phase: nextState.combat!.fishPhase, reason: "Pressure bleed" }
+      };
+    }
+  }
+
+  // Pressure is applied as tension gain. Brace reduces that spike once.
   const basePressure = Math.round(fish.pressure * pressureMult);
-  const mitigated = Math.max(0, basePressure - Math.round(state.combat.brace));
+  const mitigated = Math.max(0, basePressure - Math.round(nextState.combat!.brace));
 
-  let next: GameState = applyTension(state, mitigated, `${fish.name} pulls`);
+  // Control (stat + temporary combat control) reduces tension gained from fish pulls.
+  const controlMult = clamp(1 - stats.control * 0.018, 0.72, 1);
+  const flowMult = clamp(1 - (nextState.combat!.control ?? 0) * 0.008, 0.7, 1);
+  const tensionMult = effects.fishTensionMult;
+  const tensionDelta = Math.round(mitigated * controlMult * flowMult * tensionMult);
+
+  let next: GameState = applyTension(nextState, tensionDelta, `${fish.name} pulls`);
+
+  // Reactive skill effect: if tension crosses a threshold, grant temporary control (once per turn).
+  if (effects.controlOnHighTensionThreshold !== null) {
+    const thresh = effects.controlOnHighTensionThreshold;
+    const already = next.combat?.skill?.highTensionTriggeredTurn === next.combat?.turn;
+    if (!already && next.player.tension >= thresh) {
+      next = {
+        ...next,
+        combat: {
+          ...next.combat!,
+          control: clamp(next.combat!.control + effects.controlOnHighTensionGain, 0, 60),
+          skill: { ...(next.combat?.skill ?? {}), highTensionTriggeredTurn: next.combat!.turn }
+        },
+        lastEvent: { type: "LOG", text: "You find a clutch pocket of control." }
+      };
+    }
+  }
 
   // Reset brace after it absorbs one hit.
   next = {
@@ -319,7 +641,12 @@ function fishTurn(_content: ContentBundle, fish: FishDef, state: GameState): Gam
   };
 
   // If tension is above safe limits, line integrity takes wear.
-  next = applyIntegrityWear(next, "Over-tension");
+  next = applyIntegrityWear(_content, next, "Over-tension");
+
+  // Clear one-turn flags.
+  if (next.combat?.skill?.negateWearThisTurn) {
+    next = { ...next, combat: { ...next.combat, skill: { ...next.combat.skill, negateWearThisTurn: false } } };
+  }
 
   if (next.player.lineIntegrity <= 0) return resolveLose(next);
   return next;
@@ -352,6 +679,18 @@ function resolveLose(state: GameState): GameState {
   };
 }
 
+// -----------------------------------------------------------------------------
+// XP / LEVELING
+// -----------------------------------------------------------------------------
+
+/**
+ * Grants XP and applies level-ups.
+ *
+ * Locked leveling reward model (implemented here):
+ * - Every level: +1 unspent stat point (player choice)
+ * - Every level: +1 unspent skill point (unlock or upgrade)
+ * - Derived stats (like maxLineIntegrity) are recalculated via helpers
+ */
 function grantXp(content: ContentBundle, state: GameState, amount: number): GameState {
   let xp = state.player.xp + amount;
   let level = state.player.level;
@@ -363,8 +702,10 @@ function grantXp(content: ContentBundle, state: GameState, amount: number): Game
     level += 1;
     xpToNext = xpForLevel(content, level);
 
-    // Small progression bumps (do not introduce new combat stats here yet).
-    const maxLineIntegrity = state.player.maxLineIntegrity + 2;
+    // Every level: +1 stat point, +1 skill point (testing friendly).
+    const nextUnspentStats = state.player.unspentStatPoints + 1;
+    const nextUnspentSkills = state.player.unspentSkillPoints + 1;
+    const maxLineIntegrity = deriveMaxLineIntegrity(content, level, state.player.stats.durability);
 
     state = {
       ...state,
@@ -374,7 +715,9 @@ function grantXp(content: ContentBundle, state: GameState, amount: number): Game
         maxLineIntegrity,
         lineIntegrity: maxLineIntegrity,
         xp,
-        xpToNext
+        xpToNext,
+        unspentStatPoints: nextUnspentStats,
+        unspentSkillPoints: nextUnspentSkills
       },
       lastEvent: { type: "LEVEL_UP", level }
     };
@@ -392,6 +735,10 @@ function xpForLevel(content: ContentBundle, level: number) {
   const growth = content.xpCurve?.growth ?? 1.22;
   return Math.max(10, Math.floor(base * Math.pow(growth, Math.max(0, level - 1))));
 }
+
+// -----------------------------------------------------------------------------
+// UTILITIES (RNG / CLAMP)
+// -----------------------------------------------------------------------------
 
 function firstRegionId(content: ContentBundle): Id | null {
   const keys = Object.keys(content.regions ?? {});
@@ -417,6 +764,10 @@ function clampNumber(v: any, min: number, max: number, fallback: number) {
   if (typeof v !== "number" || Number.isNaN(v)) return fallback;
   return clamp(v, min, max);
 }
+
+// -----------------------------------------------------------------------------
+// CONTENT INTERPRETATION (FISH / PHASES / ACTIONS)
+// -----------------------------------------------------------------------------
 
 type FishDef = { id: Id; name: string; maxStamina: number; pressure: number; xp: number };
 
@@ -449,8 +800,13 @@ function phaseForStamina(stamina: number, max: number): FishPhase {
   return "EXHAUSTED";
 }
 
-function phaseTuning(phase: FishPhase) {
-  if (phase === "AGGRESSIVE") return { pressureMult: 1.2, reelEffMult: 0.9 };
+function phaseTuning(state: GameState, phase: FishPhase) {
+  // Minor systemic improvement: as level rises, early surges are slightly less punishing
+  // (player handling improves; fish aren't "weaker").
+  const handling = clamp(0.0 + (state.player.level - 1) * 0.012, 0, 0.12);
+  const aggressivePressure = 1.2 - handling;
+
+  if (phase === "AGGRESSIVE") return { pressureMult: aggressivePressure, reelEffMult: 0.9 };
   if (phase === "DEFENSIVE") return { pressureMult: 0.95, reelEffMult: 0.8 };
   return { pressureMult: 0.7, reelEffMult: 1.25 };
 }
@@ -504,10 +860,15 @@ function interpretAction(a: ContentBundle["actions"][Id]) {
   };
 }
 
+// -----------------------------------------------------------------------------
+// TENSION / INTEGRITY RULES
+// -----------------------------------------------------------------------------
+
 function safeTensionLimit(state: GameState): number {
   // Control slightly raises the safe band. Keep it subtle.
-  const control = state.combat?.control ?? 0;
-  return clamp(58 + Math.round(control * 0.35), 50, 80);
+  const combatControl = state.combat?.control ?? 0;
+  const statControl = state.player.stats?.control ?? 0;
+  return clamp(58 + Math.round(combatControl * 0.35) + Math.round(statControl * 1.15), 50, 86);
 }
 
 function applyTension(state: GameState, delta: number, reason?: string): GameState {
@@ -519,17 +880,173 @@ function applyTension(state: GameState, delta: number, reason?: string): GameSta
   };
 }
 
-function applyIntegrityWear(state: GameState, reason?: string): GameState {
+function applyIntegrityWear(content: ContentBundle, state: GameState, reason?: string): GameState {
+  // If a skill flag negates wear this turn, do nothing.
+  if (state.combat?.skill?.negateWearThisTurn) return state;
+
   const safe = safeTensionLimit(state);
   const over = Math.max(0, state.player.tension - safe);
   if (over <= 0) return state;
 
   // Wear is slow, but it *matters*.
-  const wear = clamp(Math.ceil(over / 10), 1, 8);
+  // This is the ONLY path to defeat: integrity -> 0 (line break).
+  const baseWear = clamp(Math.ceil(over / 10), 1, 8);
+  const stats = state.player.stats;
+  const effects = collectEffects(content, state);
+
+  const durabilityMult = clamp(1 - stats.durability * 0.03, 0.65, 1);
+  const wearMult = Math.max(0.2, durabilityMult * effects.integrityWearMult);
+  const wear = clamp(Math.round(baseWear * wearMult), 1, 8);
   const nextIntegrity = clamp(state.player.lineIntegrity - wear, 0, state.player.maxLineIntegrity);
   return {
     ...state,
     player: { ...state.player, lineIntegrity: nextIntegrity },
     lastEvent: { type: "INTEGRITY", delta: -wear, integrity: nextIntegrity, reason: reason ?? "Line strain" }
   };
+}
+
+// -----------------------------------------------------------------------------
+// PROGRESSION MATH (STATS / POINT TOTALS / DERIVED VALUES)
+// -----------------------------------------------------------------------------
+
+function defaultStats(): PlayerStats {
+  return { control: 0, power: 0, durability: 0, precision: 0, tactics: 0 };
+}
+
+function normalizeStats(s: any): PlayerStats {
+  const d = defaultStats();
+  if (!s || typeof s !== "object") return d;
+  return {
+    control: clampNumber(s.control, 0, 99, d.control),
+    power: clampNumber(s.power, 0, 99, d.power),
+    durability: clampNumber(s.durability, 0, 99, d.durability),
+    precision: clampNumber(s.precision, 0, 99, d.precision),
+    tactics: clampNumber(s.tactics, 0, 99, d.tactics)
+  };
+}
+
+function sumStats(stats: PlayerStats): number {
+  return stats.control + stats.power + stats.durability + stats.precision + stats.tactics;
+}
+
+function sumSkillRanks(ranks: Record<Id, number>): number {
+  let n = 0;
+  for (const v of Object.values(ranks)) {
+    if (typeof v === "number" && v > 0) n += v;
+  }
+  return n;
+}
+
+function totalStatPointsForLevel(level: number): number {
+  // Testing-friendly: start with 1 at level 1.
+  return Math.max(0, level);
+}
+
+function totalSkillPointsForLevel(level: number): number {
+  // Testing-friendly: start with 1 at level 1.
+  return Math.max(0, level);
+}
+
+function deriveMaxLineIntegrity(content: ContentBundle, level: number, durability: number): number {
+  const t = content.tuning?.progression;
+  const base = t?.baseLineIntegrity ?? 100;
+  const perLevel = t?.lineIntegrityPerLevel ?? 2;
+  const perDur = t?.lineIntegrityPerDurability ?? 6;
+  return clamp(base + perLevel * Math.max(0, level - 1) + perDur * Math.max(0, durability), 60, 260);
+}
+
+function levelBraceBonus(level: number): number {
+  // Minor systemic improvement: brace gets a little better each level.
+  return clamp(0.0 + (level - 1) * 0.01, 0, 0.12);
+}
+
+// -----------------------------------------------------------------------------
+// SKILLS (DATA-DRIVEN)
+// -----------------------------------------------------------------------------
+
+function computeKnownActions(content: ContentBundle, baseActions: Id[], skillRanks: Record<Id, number>): Id[] {
+  // ACTIVE skills can grant actions. We treat action IDs as a set.
+  const out = new Set<Id>(baseActions ?? []);
+  for (const [skillId, rank] of Object.entries(skillRanks ?? {})) {
+    if (!rank || rank <= 0) continue;
+    const s = content.skills?.[skillId];
+    if (!s) continue;
+    if (s.type !== "ACTIVE") continue;
+    for (const a of s.grantsActions ?? []) out.add(a);
+  }
+  return Array.from(out);
+}
+
+type EffectTotals = {
+  integrityWearMult: number;
+  fishTensionMult: number;
+  braceBonus: number;
+  braceReliefBonus: number;
+  controlOnBrace: number;
+  staminaBleedExhausted: number;
+  controlOnHighTensionThreshold: number | null;
+  controlOnHighTensionGain: number;
+  negateWearOnPerfect: boolean;
+};
+
+function collectEffects(content: ContentBundle, state: GameState): EffectTotals {
+  // Combine all learned skill effects into simple totals.
+  // The combat loop reads these totals instead of hardcoding skill IDs.
+  const totals: EffectTotals = {
+    integrityWearMult: 1,
+    fishTensionMult: 1,
+    braceBonus: 0,
+    braceReliefBonus: 0,
+    controlOnBrace: 0,
+    staminaBleedExhausted: 0,
+    controlOnHighTensionThreshold: null,
+    controlOnHighTensionGain: 0,
+    negateWearOnPerfect: false
+  };
+
+  const skills = content.skills ?? {};
+  for (const [skillId, rank] of Object.entries(state.player.skillRanks ?? {})) {
+    if (!rank || rank <= 0) continue;
+    const def = skills[skillId];
+    if (!def) continue;
+    for (const e of def.effects ?? []) {
+      switch (e.kind) {
+        case "INTEGRITY_WEAR_MULT":
+          // Multiplicative reduction in integrity wear when over-tension.
+          totals.integrityWearMult *= Math.max(0.25, 1 - e.multPerRank * rank);
+          break;
+        case "FISH_TENSION_MULT":
+          // Multiplicative reduction to fish pull tension (applied in fishTurn).
+          totals.fishTensionMult *= Math.max(0.4, 1 - e.multPerRank * rank);
+          break;
+        case "BRACE_BONUS":
+          // Flat bonuses; final scaling also includes tactics + level.
+          totals.braceBonus += e.bracePerRank * rank;
+          totals.braceReliefBonus += e.reliefPerRank * rank;
+          break;
+        case "CONTROL_ON_BRACE":
+          // Reactive: after Bracing, gain temporary combat control.
+          totals.controlOnBrace += e.controlPerRank * rank;
+          break;
+        case "STAMINA_BLEED_EXHAUSTED":
+          // Passive: tiny progress tick while the fish is exhausted.
+          totals.staminaBleedExhausted += e.bleedPerRank * rank;
+          break;
+        case "CONTROL_ON_HIGH_TENSION":
+          // Reactive: when tension is high, grant temporary combat control.
+          totals.controlOnHighTensionThreshold =
+            totals.controlOnHighTensionThreshold === null
+              ? e.threshold
+              : Math.min(totals.controlOnHighTensionThreshold, e.threshold);
+          totals.controlOnHighTensionGain += e.controlPerRank * rank;
+          break;
+        case "NEGATE_WEAR_ON_PERFECT":
+          // Reactive: on PERFECT timing, applyAction sets a one-turn "negate wear" flag.
+          totals.negateWearOnPerfect = true;
+          break;
+      }
+    }
+  }
+
+  return totals;
 }

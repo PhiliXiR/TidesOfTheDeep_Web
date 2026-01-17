@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ContentBundle, GameState, Id } from "@/game/types";
+import { ContentBundle, GameState, Id, StatKey, TimingGrade } from "@/game/types";
 import * as Engine from "@/game/engine";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/ui/components/Button";
@@ -15,9 +15,7 @@ type Props = {
   onSoftToast?: (text: string) => void;
 };
 
-type Tab = "MAIN" | "FIGHT" | "ITEMS" | "TECHNIQUES";
-
-type TimingGrade = "MISS" | "GOOD" | "PERFECT";
+type Tab = "MAIN" | "FIGHT" | "ITEMS" | "BUILD";
 
 type FloatText = {
   id: string;
@@ -79,7 +77,7 @@ function TabIcon({ tab }: { tab: Tab }) {
           <path d="M9 12h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
         </svg>
       );
-    case "TECHNIQUES":
+    case "BUILD":
       return (
         <svg {...common}>
           <path
@@ -107,6 +105,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
   const [selectedRegionIndex, setSelectedRegionIndex] = useState(0);
   const [selectedActionIndex, setSelectedActionIndex] = useState(0);
   const [selectedItemIndex, setSelectedItemIndex] = useState(0);
+  const [selectedBuildIndex, setSelectedBuildIndex] = useState(0);
 
   const [floats, setFloats] = useState<FloatText[]>([]);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
@@ -142,6 +141,79 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
     return out;
   }, [state.player.inventory, content.items]);
 
+  type BuildRow =
+    | { kind: "STAT"; id: StatKey; title: string; subtitle: string; right: string }
+    | { kind: "SKILL"; id: Id; title: string; subtitle: string; right: string }
+    | { kind: "RESPEC"; id: "respec"; title: string; subtitle: string; right: string };
+
+  const buildRows = useMemo<BuildRow[]>(() => {
+    const rows: BuildRow[] = [];
+
+    const s = state.player.stats;
+    rows.push({
+      kind: "STAT",
+      id: "control",
+      title: "Control",
+      subtitle: "Less tension from fish pulls • safer in surges • slightly wider timing forgiveness",
+      right: `${s.control}`
+    });
+    rows.push({
+      kind: "STAT",
+      id: "power",
+      title: "Power",
+      subtitle: "More stamina reduction on reels • bigger techniques • riskier at high tension",
+      right: `${s.power}`
+    });
+    rows.push({
+      kind: "STAT",
+      id: "durability",
+      title: "Durability",
+      subtitle: "More max Line Integrity • less wear from tension spikes",
+      right: `${s.durability}`
+    });
+    rows.push({
+      kind: "STAT",
+      id: "precision",
+      title: "Precision",
+      subtitle: "Bigger perfect windows • stronger perfect rewards • consistency under pressure",
+      right: `${s.precision}`
+    });
+    rows.push({
+      kind: "STAT",
+      id: "tactics",
+      title: "Tactics",
+      subtitle: "Stronger Brace/Adjust/Technique effects • improved fight flow",
+      right: `${s.tactics}`
+    });
+
+    const skills = Object.values(content.skills ?? {});
+    skills.sort((a, b) => (a.requiredLevel - b.requiredLevel) || a.label.localeCompare(b.label));
+
+    for (const sk of skills) {
+      const rank = state.player.skillRanks?.[sk.id] ?? 0;
+      const rankText = `${rank}/${sk.maxRank}`;
+      const type = sk.type === "PASSIVE" ? "Passive" : sk.type === "ACTIVE" ? "Active" : "Reactive";
+      const subtitle = `${type} • Lv ${sk.requiredLevel}+${sk.description ? ` • ${sk.description}` : ""}`;
+      rows.push({
+        kind: "SKILL",
+        id: sk.id,
+        title: sk.label,
+        subtitle,
+        right: rankText
+      });
+    }
+
+    rows.push({
+      kind: "RESPEC",
+      id: "respec",
+      title: "Respec (Testing Mode)",
+      subtitle: "Refund all stat + skill points • choose again",
+      right: "Reset"
+    });
+
+    return rows;
+  }, [content.skills, state.player.stats, state.player.skillRanks]);
+
   // keep action/item cursors in range
   useEffect(() => {
     setSelectedActionIndex((i) => clamp(i, 0, Math.max(0, fightActions.length - 1)));
@@ -150,6 +222,10 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
   useEffect(() => {
     setSelectedItemIndex((i) => clamp(i, 0, Math.max(0, inventoryList.length - 1)));
   }, [inventoryList.length]);
+
+  useEffect(() => {
+    setSelectedBuildIndex((i) => clamp(i, 0, Math.max(0, buildRows.length - 1)));
+  }, [buildRows.length]);
 
   async function safeCommit(next: GameState) {
     try {
@@ -274,7 +350,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
     { id: "MAIN", label: "Main", enabled: true },
     { id: "FIGHT", label: "Fight", enabled: inCombat },
     { id: "ITEMS", label: "Items", enabled: true },
-    { id: "TECHNIQUES", label: "Techniques", enabled: inCombat }
+    { id: "BUILD", label: "Build", enabled: true }
   ];
 
   const activeTabIndex = useMemo(() => Math.max(0, tabs.findIndex((t) => t.id === tab)), [tab]);
@@ -298,9 +374,10 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
   }, [timingOpen]);
 
   function gradeFromTimingPos(pos: number): TimingGrade {
+    const w = Engine.getTimingWindows(content, state);
     const dist = Math.abs(pos - 0.5);
-    if (dist <= 0.07) return "PERFECT";
-    if (dist <= 0.18) return "GOOD";
+    if (dist <= w.perfectRadius) return "PERFECT";
+    if (dist <= w.goodRadius) return "GOOD";
     return "MISS";
   }
 
@@ -338,6 +415,11 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
   function moveItemSelection(delta: number) {
     if (inventoryList.length <= 1) return;
     setSelectedItemIndex((i) => (i + delta + inventoryList.length) % inventoryList.length);
+  }
+
+  function moveBuildSelection(delta: number) {
+    if (buildRows.length <= 1) return;
+    setSelectedBuildIndex((i) => (i + delta + buildRows.length) % buildRows.length);
   }
 
   function confirmEnter() {
@@ -427,6 +509,28 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
       act(() => Engine.useItem(content, state, it.id));
       return;
     }
+
+    // BUILD: Enter spends points / unlocks / respec
+    if (tab === "BUILD") {
+      const row = buildRows[selectedBuildIndex];
+      if (!row) return;
+
+      if (row.kind === "STAT") {
+        if (state.player.unspentStatPoints <= 0) return;
+        act(() => Engine.spendStatPoint(content, state, row.id));
+        return;
+      }
+
+      if (row.kind === "SKILL") {
+        act(() => Engine.unlockOrUpgradeSkill(content, state, row.id));
+        return;
+      }
+
+      if (row.kind === "RESPEC") {
+        act(() => Engine.respecAll(content, state));
+        return;
+      }
+    }
   }
 
   function handleEsc() {
@@ -481,7 +585,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
         if (tab === "MAIN") moveRegionSelection(delta);
         else if (tab === "FIGHT") moveActionSelection(delta);
         else if (tab === "ITEMS") moveItemSelection(delta);
-        else if (tab === "TECHNIQUES") moveActionSelection(delta); // placeholder: same list
+        else if (tab === "BUILD") moveBuildSelection(delta);
         return;
       }
 
@@ -490,7 +594,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
       if (e.key === "1") setTab("MAIN");
       if (e.key === "2" && inCombat) setTab("FIGHT");
       if (e.key === "3") setTab("ITEMS");
-      if (e.key === "4" && inCombat) setTab("TECHNIQUES");
+      if (e.key === "4") setTab("BUILD");
     }
 
     window.addEventListener("keydown", onKeyDown, { passive: false });
@@ -860,15 +964,65 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
     );
   }
 
-  function TechniquesPanel() {
-    if (!inCombat) return <div className="subtle">No combat right now.</div>;
+  function BuildPanel() {
+    const skillCount = Object.keys(content.skills ?? {}).length;
+
+    function disabledReasonForBuildRow(r: BuildRow): string | null {
+      if (r.kind === "STAT") {
+        if (state.player.unspentStatPoints <= 0) return "No stat points";
+        return null;
+      }
+      if (r.kind === "SKILL") {
+        const sk = content.skills?.[r.id];
+        if (!sk) return "Missing skill";
+        if (state.player.unspentSkillPoints <= 0) return "No skill points";
+        if (state.player.level < sk.requiredLevel) return `Requires level ${sk.requiredLevel}`;
+        const rank = state.player.skillRanks?.[sk.id] ?? 0;
+        if (rank >= sk.maxRank) return "Max rank";
+        for (const p of sk.prereq ?? []) {
+          if ((state.player.skillRanks?.[p] ?? 0) <= 0) return `Missing prerequisite: ${p}`;
+        }
+        return null;
+      }
+      return null;
+    }
+
     return (
       <div className="grid" style={{ gap: 10 }}>
         <div>
-          <div className="label">Techniques</div>
-          <div className="subtle">Placeholder (uses same list as Commands)</div>
+          <div className="label">Build</div>
+          <div className="subtle">
+            Stats: {state.player.unspentStatPoints} points • Skills: {state.player.unspentSkillPoints} points
+          </div>
+          {skillCount === 0 ? <div className="subtle">No skills in content bundle yet.</div> : null}
         </div>
-        <FightPanel />
+
+        <div className="list">
+          {buildRows.map((r, idx) => {
+            const selected = idx === selectedBuildIndex;
+            const reason = disabledReasonForBuildRow(r);
+            const disabled = !!reason && r.kind !== "RESPEC";
+
+            return (
+              <SelectRow
+                key={`${r.kind}_${r.id}`}
+                title={r.title}
+                subtitle={r.subtitle}
+                right={r.right}
+                selected={selected}
+                disabled={disabled}
+                hint={selected ? reason ?? undefined : undefined}
+                onClick={() => {
+                  setSelectedBuildIndex(idx);
+                  if (disabled) return;
+                  if (r.kind === "STAT") act(() => Engine.spendStatPoint(content, state, r.id));
+                  else if (r.kind === "SKILL") act(() => Engine.unlockOrUpgradeSkill(content, state, r.id));
+                  else if (r.kind === "RESPEC") act(() => Engine.respecAll(content, state));
+                }}
+              />
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -955,7 +1109,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
                 <span className="badge-dot" />
                 <span className="label">Player</span>
               </div>
-              <div className="mono subtle">Lv {state.player.level}</div>
+              <div className="mono subtle">Lv {state.player.level} • SP {state.player.unspentStatPoints} • SK {state.player.unspentSkillPoints}</div>
             </div>
 
             <div className="grid" style={{ gap: 8 }}>
@@ -976,6 +1130,14 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
                   }}
                   transition={{ type: "spring", stiffness: 140, damping: 20 }}
                 />
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <div className="mono subtle">Control {state.player.stats.control}</div>
+                <div className="mono subtle">Power {state.player.stats.power}</div>
+                <div className="mono subtle">Durability {state.player.stats.durability}</div>
+                <div className="mono subtle">Precision {state.player.stats.precision}</div>
+                <div className="mono subtle">Tactics {state.player.stats.tactics}</div>
               </div>
 
               <Progress label="Line Integrity" value={state.player.lineIntegrity} max={state.player.maxLineIntegrity} tone="neon" />
@@ -1061,7 +1223,7 @@ export function CombatMenu({ content, state, onCommit, onSoftToast }: Props) {
           <Panel show={tab === "MAIN"}><OverworldPanel /></Panel>
           <Panel show={tab === "FIGHT"}><FightPanel /></Panel>
           <Panel show={tab === "ITEMS"}><ItemsPanel /></Panel>
-          <Panel show={tab === "TECHNIQUES"}><TechniquesPanel /></Panel>
+          <Panel show={tab === "BUILD"}><BuildPanel /></Panel>
         </div>
 
         <Modal open={defeatPromptOpen} title="Defeated">

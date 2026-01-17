@@ -1,4 +1,18 @@
 {
+  "tuning": {
+    "progression": {
+      "baseLineIntegrity": 100,
+      "lineIntegrityPerLevel": 2,
+      "lineIntegrityPerDurability": 6
+    },
+    "timing": {
+      "basePerfectRadius": 0.07,
+      "baseGoodRadius": 0.18,
+      "perfectPerPrecision": 0.008,
+      "goodPerControl": 0.0035,
+      "goodPerLevel": 0.0012
+    }
+  },
   "items": {
     "large_potion": {
       "id": "large_potion",
@@ -63,6 +77,80 @@
       "timing": "basic",
       "staminaDelta": -26,
       "tensionDelta": 26
+    },
+    "controlled_reel": {
+      "id": "controlled_reel",
+      "label": "Controlled Reel",
+      "kind": "reel",
+      "timing": "basic",
+      "staminaDelta": -6,
+      "tensionDelta": 6,
+      "tags": ["safe"]
+    }
+  },
+  "skills": {
+    "braided_line": {
+      "id": "braided_line",
+      "label": "Braided Line",
+      "description": "Reduces integrity wear from tension spikes.",
+      "type": "PASSIVE",
+      "requiredLevel": 1,
+      "maxRank": 3,
+      "effects": [{ "kind": "INTEGRITY_WEAR_MULT", "multPerRank": 0.08 }]
+    },
+    "steady_hands": {
+      "id": "steady_hands",
+      "label": "Steady Hands",
+      "description": "Reduces tension gained from fish pulls.",
+      "type": "PASSIVE",
+      "requiredLevel": 1,
+      "maxRank": 2,
+      "effects": [{ "kind": "FISH_TENSION_MULT", "multPerRank": 0.05 }]
+    },
+    "brace_feedback": {
+      "id": "brace_feedback",
+      "label": "Brace Feedback",
+      "description": "After Bracing, gain temporary Control.",
+      "type": "REACTIVE",
+      "requiredLevel": 2,
+      "maxRank": 2,
+      "effects": [{ "kind": "CONTROL_ON_BRACE", "controlPerRank": 6 }]
+    },
+    "perfect_guard": {
+      "id": "perfect_guard",
+      "label": "Perfect Guard",
+      "description": "On perfect timing, negate integrity wear this turn.",
+      "type": "REACTIVE",
+      "requiredLevel": 3,
+      "maxRank": 1,
+      "effects": [{ "kind": "NEGATE_WEAR_ON_PERFECT" }]
+    },
+    "exhausted_bleed": {
+      "id": "exhausted_bleed",
+      "label": "Exhausted Bleed",
+      "description": "In Exhausted phase, the fish slowly bleeds stamina.",
+      "type": "PASSIVE",
+      "requiredLevel": 4,
+      "maxRank": 3,
+      "effects": [{ "kind": "STAMINA_BLEED_EXHAUSTED", "bleedPerRank": 1 }]
+    },
+    "clutch_control": {
+      "id": "clutch_control",
+      "label": "Clutch Control",
+      "description": "When tension runs high, gain a burst of Control.",
+      "type": "REACTIVE",
+      "requiredLevel": 5,
+      "maxRank": 2,
+      "effects": [{ "kind": "CONTROL_ON_HIGH_TENSION", "threshold": 78, "controlPerRank": 10 }]
+    },
+    "controlled_reel_skill": {
+      "id": "controlled_reel_skill",
+      "label": "Controlled Reel",
+      "description": "Unlocks a safer reel option.",
+      "type": "ACTIVE",
+      "requiredLevel": 2,
+      "maxRank": 1,
+      "grantsActions": ["controlled_reel"]
     }
   },
   "enemies": {
